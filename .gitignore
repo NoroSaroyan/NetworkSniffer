@@ -1,0 +1,8 @@
+.env.*
+.env
+
+*.o
+
+/docs/Claude.md
+
+/.idea
