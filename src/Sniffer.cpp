@@ -40,7 +40,8 @@
  * @note Each Sniffer instance exclusively uses one BPF device.
  * 
  * @see openBpfDevice(), configureInterface()
- */\nSniffer::Sniffer(const std::string& iface) : iface_(iface) {
+ */
+Sniffer::Sniffer(const std::string& iface) : iface_(iface) {
     fd_ = openBpfDevice();
     configureInterface();
 }
