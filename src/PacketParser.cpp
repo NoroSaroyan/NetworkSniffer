@@ -33,7 +33,7 @@
 
 // Main entry point for packet parsing and analysis
 void PacketParser::parseAndPrint(const unsigned char* packet, size_t caplen, const struct timeval& timestamp) {
-    // === Initial Validation ===
+    //Initial Validation
     
     // Ensure we have at least enough data for an Ethernet header (14 bytes)
     // This is the minimum required for any meaningful packet analysis
@@ -43,7 +43,7 @@ void PacketParser::parseAndPrint(const unsigned char* packet, size_t caplen, con
         return;
     }
     
-    // === Begin Protocol Analysis ===
+    //Begin Protocol Analysis
     
     // Start parsing at Layer 2 (Ethernet) and work our way up the stack
     // The Ethernet parser will determine the next-layer protocol and
@@ -80,7 +80,7 @@ void PacketParser::parseAndPrint(const unsigned char* packet, size_t caplen, con
  * @see parseIPv4(), struct ether_header, ETHERTYPE_IP
  */
 void PacketParser::parseEthernet(const unsigned char* packet, size_t caplen, const struct timeval& timestamp) {
-    // === Ethernet Frame Structure (14 bytes total) ===
+    //Ethernet Frame Structure (14 bytes total)
     // Bytes 0-5:   Destination MAC address
     // Bytes 6-11:  Source MAC address  
     // Bytes 12-13: EtherType (protocol identifier)
@@ -93,7 +93,7 @@ void PacketParser::parseEthernet(const unsigned char* packet, size_t caplen, con
     // EtherType identifies the next-layer protocol (IPv4, IPv6, ARP, etc.)
     uint16_t ethertype = ntohs(eth->ether_type);
     
-    // === Protocol Dispatch ===
+    //Protocol Dispatch
     
     // Currently we only handle IPv4 traffic (0x0800)
     // This could be extended to support:
@@ -144,7 +144,7 @@ void PacketParser::parseEthernet(const unsigned char* packet, size_t caplen, con
  * @see parseTCP(), parseUDP(), struct ip, inet_ntop()
  */
 void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t caplen, const struct timeval& timestamp) {
-    // === Initial IPv4 Header Validation ===
+    //Initial IPv4 Header Validation
     
     // Ensure we have at least the minimum IPv4 header (20 bytes)
     if (offset + sizeof(struct ip) > caplen) {
@@ -152,7 +152,7 @@ void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t 
         return;
     }
     
-    // === IPv4 Header Structure (20-60 bytes) ===
+    //IPv4 Header Structure (20-60 bytes)
     // Byte 0:      Version (4 bits) + Header Length (4 bits)
     // Byte 1:      Type of Service / DSCP
     // Bytes 2-3:   Total Length
@@ -165,7 +165,7 @@ void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t 
     // Cast to IPv4 header structure
     const struct ip* ip_hdr = reinterpret_cast<const struct ip*>(packet + offset);
     
-    // === Handle Variable-Length IPv4 Header ===
+    //Handle Variable-Length IPv4 Header
     
     // IPv4 headers can include options, making them variable length
     // ip_hl field contains header length in 32-bit words (minimum 5 = 20 bytes)
@@ -177,7 +177,7 @@ void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t 
         return;
     }
     
-    // === Extract IPv4 Addresses ===
+    //Extract IPv4 Addresses
     
     // Convert 32-bit IP addresses to human-readable dotted decimal notation
     char src_ip[INET_ADDRSTRLEN];  // Buffer for source IP ("xxx.xxx.xxx.xxx")
@@ -188,13 +188,13 @@ void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t 
     inet_ntop(AF_INET, &ip_hdr->ip_src, src_ip, INET_ADDRSTRLEN);
     inet_ntop(AF_INET, &ip_hdr->ip_dst, dst_ip, INET_ADDRSTRLEN);
     
-    // === Calculate Transport Layer Offset ===
+    //Calculate Transport Layer Offset
     
     // The transport layer (TCP/UDP) starts after the IPv4 header
     // This accounts for any IPv4 options that may be present
     size_t transport_offset = offset + ip_hdr_len;
     
-    // === Protocol Dispatch to Transport Layer ===
+    //Protocol Dispatch to Transport Layer
     
     // The IPv4 Protocol field identifies the next-layer protocol
     // Most common values: 1=ICMP, 6=TCP, 17=UDP
@@ -202,7 +202,6 @@ void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t 
         case IPPROTO_TCP:  // Protocol 6 - Transmission Control Protocol
             parseTCP(packet, transport_offset, caplen, src_ip, dst_ip, timestamp);
             break;
-            
         case IPPROTO_UDP:  // Protocol 17 - User Datagram Protocol
             parseUDP(packet, transport_offset, caplen, src_ip, dst_ip, timestamp);
             break;
@@ -265,7 +264,7 @@ void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t 
  */
 void PacketParser::parseTCP(const unsigned char* packet, size_t offset, size_t caplen,
                            const char* src_ip, const char* dst_ip, const struct timeval& timestamp) {
-    // === TCP Header Validation ===
+    //TCP Header Validation
     
     // Ensure we have at least the minimum TCP header (20 bytes)
     // TCP headers can be larger due to options, but 20 bytes is the minimum
@@ -274,7 +273,7 @@ void PacketParser::parseTCP(const unsigned char* packet, size_t offset, size_t c
         return;
     }
     
-    // === TCP Header Structure (20-60 bytes) ===
+    //TCP Header Structure (20-60 bytes)
     // Bytes 0-1:   Source Port
     // Bytes 2-3:   Destination Port
     // Bytes 4-7:   Sequence Number
@@ -288,14 +287,14 @@ void PacketParser::parseTCP(const unsigned char* packet, size_t offset, size_t c
     // Cast to TCP header structure
     const struct tcphdr* tcp_hdr = reinterpret_cast<const struct tcphdr*>(packet + offset);
     
-    // === Extract Port Information ===
+    //Extract Port Information
     
     // Convert port numbers from network byte order (big-endian) to host byte order
     // Port numbers identify the application/service (HTTP=80, HTTPS=443, SSH=22, etc.)
     uint16_t src_port = ntohs(tcp_hdr->th_sport);  // Source port
     uint16_t dst_port = ntohs(tcp_hdr->th_dport);  // Destination port
     
-    // === Format and Display TCP Connection Information ===
+    //Format and Display TCP Connection Information
     
     // Generate timestamp string for this packet
     char time_str[64];
@@ -361,7 +360,7 @@ void PacketParser::parseTCP(const unsigned char* packet, size_t offset, size_t c
  */
 void PacketParser::parseUDP(const unsigned char* packet, size_t offset, size_t caplen,
                            const char* src_ip, const char* dst_ip, const struct timeval& timestamp) {
-    // === UDP Header Validation ===
+    //UDP Header Validation
     
     // Ensure we have the complete UDP header (always 8 bytes - fixed size)
     // Unlike TCP, UDP headers are always the same size (no options)
@@ -370,7 +369,7 @@ void PacketParser::parseUDP(const unsigned char* packet, size_t offset, size_t c
         return;
     }
     
-    // === UDP Header Structure (8 bytes fixed) ===
+    // UDP Header Structure (8 bytes fixed) 
     // Bytes 0-1: Source Port
     // Bytes 2-3: Destination Port
     // Bytes 4-5: Length (header + data)
@@ -379,14 +378,14 @@ void PacketParser::parseUDP(const unsigned char* packet, size_t offset, size_t c
     // Cast to UDP header structure
     const struct udphdr* udp_hdr = reinterpret_cast<const struct udphdr*>(packet + offset);
     
-    // === Extract Port Information ===
+    //Extract Port Information
     
     // Convert port numbers from network byte order to host byte order
     // Common UDP ports: DNS=53, DHCP=67/68, SNMP=161, NTP=123
     uint16_t src_port = ntohs(udp_hdr->uh_sport);  // Source port
     uint16_t dst_port = ntohs(udp_hdr->uh_dport);  // Destination port
     
-    // === Format and Display UDP Datagram Information ===
+    //Format and Display UDP Datagram Information
     
     // Generate timestamp string for this packet
     char time_str[64];
@@ -437,7 +436,7 @@ void PacketParser::parseUDP(const unsigned char* packet, size_t offset, size_t c
  * @see struct timeval, localtime(), strftime(), snprintf()
  */
 void PacketParser::formatTimestamp(const struct timeval& timestamp, char* buffer, size_t bufsize) {
-    // === Convert Seconds to Date/Time ===
+    //Convert Seconds to Date/Time
     
     // timestamp.tv_sec contains seconds since Unix epoch (January 1, 1970)
     // localtime() converts this to broken-down time in local timezone
@@ -447,7 +446,7 @@ void PacketParser::formatTimestamp(const struct timeval& timestamp, char* buffer
     // This provides human-readable date and time down to seconds
     strftime(buffer, bufsize, "%Y-%m-%d %H:%M:%S", tm_info);
     
-    // === Add Microsecond Precision ===
+    //Add Microsecond Precision
     
     // timestamp.tv_usec contains microseconds (0-999999)
     // This provides sub-second timing precision critical for network analysis
