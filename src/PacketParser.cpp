@@ -29,6 +29,7 @@
 #include <netinet/ip_icmp.h>   // ICMP header structure and type definitions
 #include <arpa/inet.h>         // Network address conversion (inet_ntop, ntohs)
 #include <iostream>            // Standard output for packet display
+#include <string>              // String class for flags formatting
 #include <cstring>             // String manipulation (strlen, strncat)
 #include <ctime>               // Time formatting (localtime, strftime)
 
@@ -292,26 +293,42 @@ void PacketParser::parseTCP(const unsigned char* packet, size_t offset, size_t c
     const struct tcphdr* tcp_hdr = reinterpret_cast<const struct tcphdr*>(packet + offset);
     
     //Extract Port Information
-    
+
     // Convert port numbers from network byte order (big-endian) to host byte order
     // Port numbers identify the application/service (HTTP=80, HTTPS=443, SSH=22, etc.)
     uint16_t src_port = ntohs(tcp_hdr->th_sport);  // Source port
     uint16_t dst_port = ntohs(tcp_hdr->th_dport);  // Destination port
-    
+
+    //Extract TCP Flags
+
+    // Build a string showing which TCP flags are set
+    // This helps identify the packet type (SYN, ACK, FIN, RST, etc.)
+    std::string flags = "";
+    if (tcp_hdr->th_flags & TH_SYN) flags += "SYN ";
+    if (tcp_hdr->th_flags & TH_ACK) flags += "ACK ";
+    if (tcp_hdr->th_flags & TH_FIN) flags += "FIN ";
+    if (tcp_hdr->th_flags & TH_RST) flags += "RST ";
+    if (tcp_hdr->th_flags & TH_PUSH) flags += "PSH ";
+    if (tcp_hdr->th_flags & TH_URG) flags += "URG ";
+    if (!flags.empty()) flags.pop_back();  // Remove trailing space
+
     //Format and Display TCP Connection Information
-    
+
     // Generate timestamp string for this packet
     char time_str[64];
     formatTimestamp(timestamp, time_str, sizeof(time_str));
-    
-    // Display TCP connection: timestamp src_ip:port -> dst_ip:port TCP len=bytes
-    // This format makes it easy to track TCP connections and data flow
-    std::cout << time_str << " " << src_ip << ":" << src_port 
-             << " -> " << dst_ip << ":" << dst_port 
-             << " TCP len=" << (caplen - offset) << std::endl;
-    
-    // Note: We could extend this to show TCP flags (SYN, ACK, FIN, etc.)
-    // and sequence numbers for detailed connection analysis
+
+    // Display TCP connection with flags: timestamp src_ip:port -> dst_ip:port TCP [flags] seq=X len=bytes
+    std::cout << time_str << " " << src_ip << ":" << src_port
+             << " -> " << dst_ip << ":" << dst_port
+             << " " << COLOR_TCP << "TCP" << COLOR_RESET;
+
+    if (!flags.empty()) {
+        std::cout << " [" << flags << "]";
+    }
+
+    std::cout << " seq=" << ntohl(tcp_hdr->th_seq)
+             << " len=" << (caplen - offset) << std::endl;
 }
 
 /**
@@ -383,24 +400,39 @@ void PacketParser::parseUDP(const unsigned char* packet, size_t offset, size_t c
     const struct udphdr* udp_hdr = reinterpret_cast<const struct udphdr*>(packet + offset);
     
     //Extract Port Information
-    
+
     // Convert port numbers from network byte order to host byte order
     // Common UDP ports: DNS=53, DHCP=67/68, SNMP=161, NTP=123
     uint16_t src_port = ntohs(udp_hdr->uh_sport);  // Source port
     uint16_t dst_port = ntohs(udp_hdr->uh_dport);  // Destination port
-    
+
+    //Identify Common Services
+
+    const char* service = nullptr;
+    if (src_port == 53 || dst_port == 53) service = "DNS";
+    else if (src_port == 67 || dst_port == 67 || src_port == 68 || dst_port == 68) service = "DHCP";
+    else if (src_port == 123 || dst_port == 123) service = "NTP";
+    else if (src_port == 161 || dst_port == 161 || src_port == 162 || dst_port == 162) service = "SNMP";
+    else if (src_port == 69 || dst_port == 69) service = "TFTP";
+    else if (src_port == 514 || dst_port == 514) service = "Syslog";
+
     //Format and Display UDP Datagram Information
-    
+
     // Generate timestamp string for this packet
     char time_str[64];
     formatTimestamp(timestamp, time_str, sizeof(time_str));
-    
-    // Display UDP datagram: timestamp src_ip:port -> dst_ip:port UDP len=bytes
-    // Use the UDP header's length field which includes header + payload
-    std::cout << time_str << " " << src_ip << ":" << src_port 
-             << " -> " << dst_ip << ":" << dst_port 
-             << " UDP len=" << ntohs(udp_hdr->uh_ulen) << std::endl;
-    
+
+    // Display UDP datagram: timestamp src_ip:port -> dst_ip:port UDP [service] len=bytes
+    std::cout << time_str << " " << src_ip << ":" << src_port
+             << " -> " << dst_ip << ":" << dst_port
+             << " " << COLOR_UDP << "UDP" << COLOR_RESET;
+
+    if (service) {
+        std::cout << " [" << service << "]";
+    }
+
+    std::cout << " len=" << ntohs(udp_hdr->uh_ulen) << std::endl;
+
     // Note: UDP is connectionless, so no connection state to track
     // Each datagram is independent
 }
@@ -479,11 +511,11 @@ void PacketParser::parseICMP(const unsigned char* packet, size_t offset, size_t 
     }
     
     //Display Parsed ICMP Information
-    
+
     // Output format: timestamp src_ip -> dst_ip ICMP message_type (type=X, code=Y) len=Z
-    std::cout << time_str << " " << src_ip << " -> " << dst_ip 
-             << " ICMP " << message_type 
-             << " (type=" << static_cast<int>(icmp_hdr->icmp_type) 
+    std::cout << time_str << " " << src_ip << " -> " << dst_ip
+             << " " << COLOR_ICMP << "ICMP" << COLOR_RESET << " " << message_type
+             << " (type=" << static_cast<int>(icmp_hdr->icmp_type)
              << ", code=" << static_cast<int>(icmp_hdr->icmp_code) << ")";
     
     // For ping packets, show additional identifier and sequence information

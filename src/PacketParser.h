@@ -51,6 +51,13 @@
  * input parameters and local variables.
  */
 class PacketParser {
+private:
+    // ANSI color codes for traffic type visualization
+    static constexpr const char* COLOR_TCP = "\033[34m";    // Blue for TCP
+    static constexpr const char* COLOR_UDP = "\033[32m";    // Green for UDP
+    static constexpr const char* COLOR_ICMP = "\033[33m";   // Yellow for ICMP
+    static constexpr const char* COLOR_RESET = "\033[0m";   // Reset to default
+
 public:
     /**
      * @brief Main entry point for packet parsing and display
