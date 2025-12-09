@@ -17,6 +17,7 @@
  * - IPv4 (RFC 791) packets with variable header lengths
  * - TCP (RFC 793) segments with connection information
  * - UDP (RFC 768) datagrams
+ * - ICMP (RFC 792) messages for network diagnostics
  * 
  * Output Format:
  * YYYY-MM-DD HH:MM:SS.UUUUUU src_ip:port -> dst_ip:port PROTOCOL len=bytes
@@ -37,7 +38,7 @@
  * 
  * 1. Link Layer (Ethernet) - MAC addresses and protocol identification
  * 2. Network Layer (IPv4) - IP addressing and protocol determination  
- * 3. Transport Layer (TCP/UDP) - Port numbers and connection information
+ * 3. Transport Layer (TCP/UDP/ICMP) - Port numbers, connection info, and diagnostics
  * 
  * Key Features:
  * - Defensive parsing with comprehensive bounds checking
@@ -175,6 +176,38 @@ private:
      */
     static void parseUDP(const unsigned char* packet, size_t offset, size_t caplen,
                         const char* src_ip, const char* dst_ip, const struct timeval& timestamp);
+    
+    /**
+     * @brief Parses ICMP (Layer 4) message headers
+     * 
+     * Extracts ICMP message information including message type, code, and
+     * type-specific data. ICMP is used for network diagnostics and error reporting.
+     * 
+     * ICMP Header Structure (8 bytes minimum):
+     * - Type (1 byte) - Message type (ping, unreachable, etc.)
+     * - Code (1 byte) - Subtype within message type
+     * - Checksum (2 bytes)
+     * - Type-specific data (4 bytes) - Varies by message type
+     * 
+     * Common ICMP Types:
+     * - 0: Echo Reply (ping response)
+     * - 3: Destination Unreachable
+     * - 5: Redirect Message
+     * - 8: Echo Request (ping)
+     * - 11: Time Exceeded
+     * 
+     * @param packet Pointer to start of complete packet
+     * @param offset Byte offset to start of ICMP header
+     * @param caplen Total captured packet length
+     * @param src_ip Source IP address as formatted string
+     * @param dst_ip Destination IP address as formatted string
+     * @param timestamp Packet capture timestamp
+     * 
+     * @note ICMP header is fixed 8 bytes but payload varies by type
+     * @see RFC 792 - Internet Control Message Protocol
+     */
+    static void parseICMP(const unsigned char* packet, size_t offset, size_t caplen,
+                         const char* src_ip, const char* dst_ip, const struct timeval& timestamp);
     
     /**
      * @brief Formats kernel timestamps into human-readable strings

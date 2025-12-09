@@ -26,6 +26,7 @@
 #include <netinet/ip.h>        // IPv4 header structure and protocol constants
 #include <netinet/tcp.h>       // TCP header structure and flag definitions
 #include <netinet/udp.h>       // UDP header structure
+#include <netinet/ip_icmp.h>   // ICMP header structure and type definitions
 #include <arpa/inet.h>         // Network address conversion (inet_ntop, ntohs)
 #include <iostream>            // Standard output for packet display
 #include <cstring>             // String manipulation (strlen, strncat)
@@ -199,6 +200,9 @@ void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t 
     // The IPv4 Protocol field identifies the next-layer protocol
     // Most common values: 1=ICMP, 6=TCP, 17=UDP
     switch (ip_hdr->ip_p) {
+        case IPPROTO_ICMP:  // Protocol 1 - Internet Control Message Protocol
+            parseICMP(packet, transport_offset, caplen, src_ip, dst_ip, timestamp);
+            break;
         case IPPROTO_TCP:  // Protocol 6 - Transmission Control Protocol
             parseTCP(packet, transport_offset, caplen, src_ip, dst_ip, timestamp);
             break;
@@ -207,7 +211,7 @@ void PacketParser::parseIPv4(const unsigned char* packet, size_t offset, size_t 
             break;
             
         default:
-            // Handle other protocols (ICMP, IGMP, etc.)
+            // Handle other protocols (IGMP, etc.)
             // For now, we just display basic information
             char time_str[64];
             formatTimestamp(timestamp, time_str, sizeof(time_str));
@@ -399,6 +403,99 @@ void PacketParser::parseUDP(const unsigned char* packet, size_t offset, size_t c
     
     // Note: UDP is connectionless, so no connection state to track
     // Each datagram is independent
+}
+
+/**
+ * @brief Parse ICMP (Internet Control Message Protocol) header
+ * 
+ * Analyzes ICMP messages for network diagnostics and error reporting.
+ * ICMP is used by network devices to communicate error conditions and
+ * provide diagnostic information (like ping responses).
+ * 
+ * @param packet Complete packet buffer starting from Ethernet header
+ * @param offset Byte position where ICMP header begins within the packet
+ * @param caplen Total number of bytes captured from the network interface
+ * @param src_ip Source IP address as null-terminated string in dotted decimal
+ * @param dst_ip Destination IP address as null-terminated string
+ * @param timestamp Precise packet capture time with microsecond resolution
+ */
+void PacketParser::parseICMP(const unsigned char* packet, size_t offset, size_t caplen,
+                            const char* src_ip, const char* dst_ip, const struct timeval& timestamp) {
+    //Bounds Checking
+    
+    // Ensure we have enough data for a complete ICMP header
+    // ICMP header is 8 bytes minimum: type(1) + code(1) + checksum(2) + data(4)
+    if (offset + sizeof(struct icmp) > caplen) {
+        return;  // Incomplete ICMP packet, silently ignore
+    }
+    
+    //Parse ICMP Header
+    
+    // Cast packet data to ICMP header structure for field access
+    // This provides access to type, code, checksum, and type-specific data
+    const struct icmp* icmp_hdr = reinterpret_cast<const struct icmp*>(packet + offset);
+    
+    //Format Timestamp for Display
+    
+    char time_str[64];  // Buffer for formatted timestamp string
+    formatTimestamp(timestamp, time_str, sizeof(time_str));
+    
+    //Determine ICMP Message Type and Format Output
+    
+    // ICMP messages have different meanings based on the type field
+    // Common types include ping (echo request/reply), unreachable, redirects
+    const char* message_type;
+    switch (icmp_hdr->icmp_type) {
+        case ICMP_ECHOREPLY:      // Type 0 - Echo Reply (ping response)
+            message_type = "Echo Reply (ping response)";
+            break;
+        case ICMP_UNREACH:        // Type 3 - Destination Unreachable
+            message_type = "Destination Unreachable";
+            break;
+        case ICMP_SOURCEQUENCH:   // Type 4 - Source Quench (deprecated)
+            message_type = "Source Quench";
+            break;
+        case ICMP_REDIRECT:       // Type 5 - Redirect Message
+            message_type = "Redirect";
+            break;
+        case ICMP_ECHO:           // Type 8 - Echo Request (ping)
+            message_type = "Echo Request (ping)";
+            break;
+        case ICMP_TIMXCEED:       // Type 11 - Time Exceeded (TTL expired)
+            message_type = "Time Exceeded";
+            break;
+        case ICMP_PARAMPROB:      // Type 12 - Parameter Problem
+            message_type = "Parameter Problem";
+            break;
+        case ICMP_TSTAMP:         // Type 13 - Timestamp Request
+            message_type = "Timestamp Request";
+            break;
+        case ICMP_TSTAMPREPLY:    // Type 14 - Timestamp Reply
+            message_type = "Timestamp Reply";
+            break;
+        default:
+            message_type = "Unknown ICMP";
+            break;
+    }
+    
+    //Display Parsed ICMP Information
+    
+    // Output format: timestamp src_ip -> dst_ip ICMP message_type (type=X, code=Y) len=Z
+    std::cout << time_str << " " << src_ip << " -> " << dst_ip 
+             << " ICMP " << message_type 
+             << " (type=" << static_cast<int>(icmp_hdr->icmp_type) 
+             << ", code=" << static_cast<int>(icmp_hdr->icmp_code) << ")";
+    
+    // For ping packets, show additional identifier and sequence information
+    if (icmp_hdr->icmp_type == ICMP_ECHO || icmp_hdr->icmp_type == ICMP_ECHOREPLY) {
+        std::cout << " id=" << ntohs(icmp_hdr->icmp_id) 
+                 << " seq=" << ntohs(icmp_hdr->icmp_seq);
+    }
+    
+    std::cout << " len=" << (caplen - offset) << std::endl;
+    
+    // Note: ICMP checksum verification could be added here for packet validation
+    // The checksum field is icmp_hdr->icmp_cksum (already in network byte order)
 }
 
 /**
