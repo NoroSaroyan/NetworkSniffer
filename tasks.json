@@ -1,0 +1,141 @@
+{
+  "project": "Distributed BPF Sniffer with Central TCP Server and Handshake",
+  "protocol": {
+    "frame_format": {
+      "version": "1 byte (0x01)",
+      "type": "1 byte",
+      "length": "2 bytes, big endian",
+      "payload": "JSON string, max 1024 bytes",
+      "term": "1 byte (0x0A)"
+    },
+    "types": {
+      "01": "CLIENT_HELLO",
+      "02": "SERVER_HELLO",
+      "03": "TRAFFIC_LOG",
+      "04": "FORWARD_LOG",
+      "05": "ERROR"
+    }
+  },
+  "phases": [
+    {
+      "name": "Phase 1: Server Infrastructure",
+      "tasks": [
+        {
+          "id": "srv_create_socket",
+          "file": "server.cpp",
+          "desc": "Create TCP socket using socket(AF_INET, SOCK_STREAM, 0), enable SO_REUSEADDR, bind to 0.0.0.0:<port>, and listen()."
+        },
+        {
+          "id": "srv_accept_loop",
+          "file": "server.cpp",
+          "desc": "Implement blocking accept() loop in a dedicated thread. For each client, store {fd, remote_ip} in a Client struct and push to vector with mutex."
+        },
+        {
+          "id": "srv_read_frame_header",
+          "file": "server.cpp",
+          "desc": "Implement readFrame(fd) that reads EXACTLY 1+1+2 bytes => version, type, length. Validate version is 0x01."
+        },
+        {
+          "id": "srv_read_frame_payload",
+          "file": "server.cpp",
+          "desc": "Read exactly <length> bytes from fd, then read term byte. Return {type, payload_json}."
+        }
+      ]
+    },
+    {
+      "name": "Phase 2: Handshake and SSID Assignment",
+      "tasks": [
+        {
+          "id": "srv_extract_ip",
+          "file": "server.cpp",
+          "desc": "Use getpeername(fd, ...) to extract the client's IP. Represent as string."
+        },
+        {
+          "id": "srv_register_sniffer_ip",
+          "file": "server.cpp",
+          "desc": "Maintain a map<string ip, SnifferRecord>. If IP not found, create new record with incrementing sniffer_index."
+        },
+        {
+          "id": "srv_assign_ssid",
+          "file": "server.cpp",
+          "desc": "Generate new 32-bit SSID for this connection and store in fd_to_ssid map. SSID increments per connection."
+        },
+        {
+          "id": "srv_send_server_hello",
+          "file": "server.cpp",
+          "desc": "Build TYPE=02 frame with payload: {\"ssid\":<num>,\"ip\":\"<ip>\",\"registered\":true}. Send to fd."
+        }
+      ]
+    },
+    {
+      "name": "Phase 3: Sniffer as TCP Client",
+      "tasks": [
+        {
+          "id": "cli_connect_to_server",
+          "file": "sniffer_client.cpp",
+          "desc": "Create TCP socket and connect() to server IP/port at program start before BPF loop begins."
+        },
+        {
+          "id": "cli_send_client_hello",
+          "file": "sniffer_client.cpp",
+          "desc": "Build TYPE=01 frame with payload {\"hostname\":<>,\"interface\":<>}. Send once after connect()."
+        },
+        {
+          "id": "cli_receive_server_hello",
+          "file": "sniffer_client.cpp",
+          "desc": "Wait for TYPE=02 frame. Parse payload JSON, extract and store SSID."
+        }
+      ]
+    },
+    {
+      "name": "Phase 4: Sending Logs from Sniffer",
+      "tasks": [
+        {
+          "id": "cli_modify_packetparser",
+          "file": "PacketParser.cpp",
+          "desc": "Instead of printing log lines with colors, produce a clean JSON log object containing timestamp, protocol, src, dst, length."
+        },
+        {
+          "id": "cli_build_traffic_log_frame",
+          "file": "sniffer_client.cpp",
+          "desc": "Build TYPE=03 frame with payload including {\"ssid\":stored_ssid, <log_json_fields>}. Send via send()."
+        }
+      ]
+    },
+    {
+      "name": "Phase 5: Server Re-Broadcast",
+      "tasks": [
+        {
+          "id": "srv_receive_log",
+          "file": "server.cpp",
+          "desc": "When TYPE=03 received from a sniffer fd, parse payload JSON and extract SSID."
+        },
+        {
+          "id": "srv_wrap_forward_log",
+          "file": "server.cpp",
+          "desc": "Build TYPE=04 frame with payload {\"ssid\":<>,\"log\":<payload_json>}. Then broadcast to all GUI clients (exclude sniffer fds)."
+        }
+      ]
+    },
+    {
+      "name": "Phase 6: Qt GUI Client",
+      "tasks": [
+        {
+          "id": "qt_connect",
+          "file": "QtClient.cpp",
+          "desc": "Use QTcpSocket to connect to server."
+        },
+        {
+          "id": "qt_frame_reader",
+          "file": "QtClient.cpp",
+          "desc": "Implement incremental frame parser identical to server. Handle partial reads."
+        },
+        {
+          "id": "qt_route_logs",
+          "file": "QtClient.cpp",
+          "desc": "On TYPE=04, extract ssid and append log to UI tab/page assigned to that ssid."
+        }
+      ]
+    }
+  ]
+}

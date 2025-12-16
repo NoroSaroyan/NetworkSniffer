@@ -1,0 +1,1 @@
+/Library/Developer/CommandLineTools/usr/bin/c++  -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX14.0.sdk -mmacosx-version-min=13.7 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/SnifferServer.dir/SnifferServer_autogen/mocs_compilation.cpp.o CMakeFiles/SnifferServer.dir/src/server.cpp.o -o SnifferServer  -lpthread

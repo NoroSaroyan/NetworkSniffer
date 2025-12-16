@@ -14,6 +14,9 @@
 
 #include <string>
 #include <vector>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
 
 /**
  * @class Sniffer
@@ -58,14 +61,14 @@ public:
      * @note Requires root privileges to access BPF devices
      * @see openBpfDevice(), configureInterface()
      */
-    explicit Sniffer(const std::string& iface);
-    
+    explicit Sniffer(const std::string& iface, const std::string& server_ip = "", int server_port = 0);
+
     /**
      * @brief Destructor - automatically cleans up BPF device resources
-     * 
+     *
      * Ensures proper cleanup of BPF file descriptor and any allocated resources.
      * This destructor is exception-safe and will not throw.
-     * 
+     *
      * @note Automatically called when Sniffer object goes out of scope
      */
     ~Sniffer();
@@ -154,11 +157,24 @@ private:
     
     /**
      * @brief Packet capture buffer
-     * 
+     *
      * Dynamically allocated buffer for storing packets read from the BPF device.
      * Size is determined by BIOCGBLEN ioctl call and typically ranges from
      * 4KB to 64KB depending on system configuration. Uses std::vector for
      * automatic memory management and exception safety.
      */
     std::vector<unsigned char> buffer_;
+
+    std::string server_ip_;
+    int server_port_;
+    int server_fd_ = -1;
+    uint32_t ssid_ = 0;
+
+    void connectToServer();
+    void sendClientHello();
+    void receiveServerHello();
+    bool sendFrame(uint8_t type, const std::string& payload);
+    bool readExact(int fd, void* buf, size_t len);
+    bool readFrame(int fd, uint8_t& type, std::string& payload);
+    void sendTrafficLog(const json& log);
 };

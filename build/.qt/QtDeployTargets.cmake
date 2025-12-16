@@ -1,0 +1,6 @@
+set(__QT_DEPLOY_TARGET_NetworkSniffer_FILE /Users/noriksaroyan/CLionProjects/NetworkSniffer/build/NetworkSniffer)
+set(__QT_DEPLOY_TARGET_NetworkSniffer_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_SnifferServer_FILE /Users/noriksaroyan/CLionProjects/NetworkSniffer/build/SnifferServer)
+set(__QT_DEPLOY_TARGET_SnifferServer_TYPE EXECUTABLE)
+set(__QT_DEPLOY_TARGET_SnifferGUI_FILE /Users/noriksaroyan/CLionProjects/NetworkSniffer/build/SnifferGUI)
+set(__QT_DEPLOY_TARGET_SnifferGUI_TYPE EXECUTABLE)

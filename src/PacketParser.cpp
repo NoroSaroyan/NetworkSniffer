@@ -319,16 +319,16 @@ void PacketParser::parseTCP(const unsigned char* packet, size_t offset, size_t c
     formatTimestamp(timestamp, time_str, sizeof(time_str));
 
     // Display TCP connection with flags: timestamp src_ip:port -> dst_ip:port TCP [flags] seq=X len=bytes
-    std::cout << time_str << " " << src_ip << ":" << src_port
+    std::cout << COLOR_TCP << time_str << " " << src_ip << ":" << src_port
              << " -> " << dst_ip << ":" << dst_port
-             << " " << COLOR_TCP << "TCP" << COLOR_RESET;
+             << " TCP";
 
     if (!flags.empty()) {
         std::cout << " [" << flags << "]";
     }
 
     std::cout << " seq=" << ntohl(tcp_hdr->th_seq)
-             << " len=" << (caplen - offset) << std::endl;
+             << " len=" << (caplen - offset) << COLOR_RESET << std::endl;
 }
 
 /**
@@ -423,15 +423,15 @@ void PacketParser::parseUDP(const unsigned char* packet, size_t offset, size_t c
     formatTimestamp(timestamp, time_str, sizeof(time_str));
 
     // Display UDP datagram: timestamp src_ip:port -> dst_ip:port UDP [service] len=bytes
-    std::cout << time_str << " " << src_ip << ":" << src_port
+    std::cout << COLOR_UDP << time_str << " " << src_ip << ":" << src_port
              << " -> " << dst_ip << ":" << dst_port
-             << " " << COLOR_UDP << "UDP" << COLOR_RESET;
+             << " UDP";
 
     if (service) {
         std::cout << " [" << service << "]";
     }
 
-    std::cout << " len=" << ntohs(udp_hdr->uh_ulen) << std::endl;
+    std::cout << " len=" << ntohs(udp_hdr->uh_ulen) << COLOR_RESET << std::endl;
 
     // Note: UDP is connectionless, so no connection state to track
     // Each datagram is independent
@@ -513,18 +513,18 @@ void PacketParser::parseICMP(const unsigned char* packet, size_t offset, size_t 
     //Display Parsed ICMP Information
 
     // Output format: timestamp src_ip -> dst_ip ICMP message_type (type=X, code=Y) len=Z
-    std::cout << time_str << " " << src_ip << " -> " << dst_ip
-             << " " << COLOR_ICMP << "ICMP" << COLOR_RESET << " " << message_type
+    std::cout << COLOR_ICMP << time_str << " " << src_ip << " -> " << dst_ip
+             << " ICMP " << message_type
              << " (type=" << static_cast<int>(icmp_hdr->icmp_type)
              << ", code=" << static_cast<int>(icmp_hdr->icmp_code) << ")";
-    
+
     // For ping packets, show additional identifier and sequence information
     if (icmp_hdr->icmp_type == ICMP_ECHO || icmp_hdr->icmp_type == ICMP_ECHOREPLY) {
-        std::cout << " id=" << ntohs(icmp_hdr->icmp_id) 
+        std::cout << " id=" << ntohs(icmp_hdr->icmp_id)
                  << " seq=" << ntohs(icmp_hdr->icmp_seq);
     }
-    
-    std::cout << " len=" << (caplen - offset) << std::endl;
+
+    std::cout << " len=" << (caplen - offset) << COLOR_RESET << std::endl;
     
     // Note: ICMP checksum verification could be added here for packet validation
     // The checksum field is icmp_hdr->icmp_cksum (already in network byte order)
@@ -588,4 +588,76 @@ void PacketParser::formatTimestamp(const struct timeval& timestamp, char* buffer
     
     // Final format example: "2025-11-01 14:30:25.123456"
     // This precision allows analysis of packet timing and network latency
+}
+
+PacketParser::LogCallback PacketParser::log_callback_ = nullptr;
+
+void PacketParser::setLogCallback(const LogCallback& callback) {
+    log_callback_ = callback;
+}
+
+void PacketParser::parseToJSON(const unsigned char* packet, size_t caplen, const struct timeval& timestamp, const LogCallback& callback) {
+    if (caplen < sizeof(struct ether_header)) return;
+
+    const auto* eth = reinterpret_cast<const struct ether_header*>(packet);
+    uint16_t ethertype = ntohs(eth->ether_type);
+
+    std::cout << "[PARSER] Packet received, ethertype: 0x" << std::hex << ethertype << std::dec << ", caplen: " << caplen << std::endl;
+
+    if (ethertype != ETHERTYPE_IP) {
+        std::cout << "[PARSER] Ignoring non-IPv4 packet (ethertype: 0x" << std::hex << ethertype << std::dec << ")" << std::endl;
+        return;
+    }
+
+    size_t offset = sizeof(struct ether_header);
+    if (offset + sizeof(struct ip) > caplen) return;
+
+    const auto* iph = reinterpret_cast<const struct ip*>(packet + offset);
+    size_t ip_hdr_len = iph->ip_hl * 4;
+
+    if (ip_hdr_len < sizeof(struct ip) || offset + ip_hdr_len > caplen) return;
+
+    char src_ip[INET_ADDRSTRLEN];
+    char dst_ip[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(iph->ip_src), src_ip, INET_ADDRSTRLEN);
+    inet_ntop(AF_INET, &(iph->ip_dst), dst_ip, INET_ADDRSTRLEN);
+
+    char timestamp_buf[64];
+    formatTimestamp(timestamp, timestamp_buf, sizeof(timestamp_buf));
+
+    json log;
+    log["timestamp"] = timestamp_buf;
+    log["src"] = src_ip;
+    log["dst"] = dst_ip;
+    log["length"] = caplen;
+
+    size_t transport_offset = offset + ip_hdr_len;
+
+    if (iph->ip_p == IPPROTO_TCP && transport_offset + sizeof(struct tcphdr) <= caplen) {
+        const auto* tcph = reinterpret_cast<const struct tcphdr*>(packet + transport_offset);
+        log["protocol"] = "TCP";
+        log["src_port"] = ntohs(tcph->th_sport);
+        log["dst_port"] = ntohs(tcph->th_dport);
+    } else if (iph->ip_p == IPPROTO_UDP && transport_offset + sizeof(struct udphdr) <= caplen) {
+        const auto* udph = reinterpret_cast<const struct udphdr*>(packet + transport_offset);
+        log["protocol"] = "UDP";
+        log["src_port"] = ntohs(udph->uh_sport);
+        log["dst_port"] = ntohs(udph->uh_dport);
+    } else if (iph->ip_p == IPPROTO_ICMP) {
+        log["protocol"] = "ICMP";
+    } else {
+        log["protocol"] = "OTHER";
+    }
+
+    std::cout << "[PARSER] JSON log created: " << log.dump().substr(0, 100) << "..." << std::endl;
+
+    if (callback) {
+        std::cout << "[PARSER] Invoking provided callback" << std::endl;
+        callback(log);
+    } else if (log_callback_) {
+        std::cout << "[PARSER] Invoking global callback" << std::endl;
+        log_callback_(log);
+    } else {
+        std::cout << "[PARSER] No callback available!" << std::endl;
+    }
 }

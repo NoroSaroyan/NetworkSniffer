@@ -8,9 +8,20 @@
 #include <net/bpf.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+
+const uint8_t PROTOCOL_VERSION = 0x01;
+const uint8_t TYPE_CLIENT_HELLO = 0x01;
+const uint8_t TYPE_SERVER_HELLO = 0x02;
+const uint8_t TYPE_TRAFFIC_LOG = 0x03;
+const uint8_t TERM_BYTE = 0x0A;
 
 /**
  * @brief Constructor: Initialize BPF device and configure for specified interface
@@ -41,14 +52,28 @@
  * 
  * @see openBpfDevice(), configureInterface()
  */
-Sniffer::Sniffer(const std::string& iface) : iface_(iface) {
+Sniffer::Sniffer(const std::string& iface, const std::string& server_ip, int server_port)
+    : iface_(iface), server_ip_(server_ip), server_port_(server_port) {
     fd_ = openBpfDevice();
     configureInterface();
+
+    if (!server_ip_.empty() && server_port_ > 0) {
+        connectToServer();
+        sendClientHello();
+        receiveServerHello();
+
+        PacketParser::setLogCallback([this](const json& log) {
+            this->sendTrafficLog(log);
+        });
+    }
 }
 
 Sniffer::~Sniffer() {
     if (fd_ != -1) {
         close(fd_);
+    }
+    if (server_fd_ != -1) {
+        close(server_fd_);
     }
 }
 
@@ -116,10 +141,126 @@ void Sniffer::doReadLoop() {
             struct timeval tv;
             tv.tv_sec = bh->bh_tstamp.tv_sec;
             tv.tv_usec = bh->bh_tstamp.tv_usec;
-            PacketParser::parseAndPrint(packet, bh->bh_caplen, tv);
-            
+
+            if (server_fd_ != -1) {
+                PacketParser::parseToJSON(packet, bh->bh_caplen, tv, nullptr);
+            } else {
+                PacketParser::parseAndPrint(packet, bh->bh_caplen, tv);
+            }
+
             ptr += BPF_WORDALIGN(bh->bh_hdrlen + bh->bh_caplen);
         }
+    }
+}
+
+void Sniffer::connectToServer() {
+    server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd_ < 0) {
+        throw std::runtime_error("Failed to create TCP socket");
+    }
+
+    struct sockaddr_in server_addr;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(server_port_);
+    if (inet_pton(AF_INET, server_ip_.c_str(), &server_addr.sin_addr) <= 0) {
+        throw std::runtime_error("Invalid server IP address");
+    }
+
+    if (connect(server_fd_, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        throw std::runtime_error("Failed to connect to server");
+    }
+
+    std::cout << "Connected to server at " << server_ip_ << ":" << server_port_ << std::endl;
+}
+
+void Sniffer::sendClientHello() {
+    json hello;
+    char hostname[256];
+    gethostname(hostname, sizeof(hostname));
+    hello["hostname"] = hostname;
+    hello["interface"] = iface_;
+
+    if (!sendFrame(TYPE_CLIENT_HELLO, hello.dump())) {
+        throw std::runtime_error("Failed to send CLIENT_HELLO");
+    }
+    std::cout << "Sent CLIENT_HELLO" << std::endl;
+}
+
+void Sniffer::receiveServerHello() {
+    uint8_t type;
+    std::string payload;
+
+    if (!readFrame(server_fd_, type, payload) || type != TYPE_SERVER_HELLO) {
+        throw std::runtime_error("Failed to receive SERVER_HELLO");
+    }
+
+    try {
+        json response = json::parse(payload);
+        ssid_ = response["ssid"];
+        std::cout << "Received SSID: " << ssid_ << std::endl;
+    } catch (const std::exception& e) {
+        throw std::runtime_error("Failed to parse SERVER_HELLO: " + std::string(e.what()));
+    }
+}
+
+bool Sniffer::sendFrame(uint8_t type, const std::string& payload) {
+    if (payload.length() > 1024) return false;
+
+    uint8_t header[4];
+    header[0] = PROTOCOL_VERSION;
+    header[1] = type;
+    header[2] = (payload.length() >> 8) & 0xFF;
+    header[3] = payload.length() & 0xFF;
+
+    if (write(server_fd_, header, 4) != 4) return false;
+    if (write(server_fd_, payload.data(), payload.length()) != (ssize_t)payload.length()) return false;
+    if (write(server_fd_, &TERM_BYTE, 1) != 1) return false;
+
+    return true;
+}
+
+bool Sniffer::readExact(int fd, void* buf, size_t len) {
+    size_t total = 0;
+    while (total < len) {
+        ssize_t n = read(fd, (char*)buf + total, len - total);
+        if (n <= 0) return false;
+        total += n;
+    }
+    return true;
+}
+
+bool Sniffer::readFrame(int fd, uint8_t& type, std::string& payload) {
+    uint8_t header[4];
+    if (!readExact(fd, header, 4)) return false;
+
+    if (header[0] != PROTOCOL_VERSION) return false;
+
+    type = header[1];
+    uint16_t length = (header[2] << 8) | header[3];
+
+    if (length > 1024) return false;
+
+    std::vector<char> payload_buf(length);
+    if (!readExact(fd, payload_buf.data(), length)) return false;
+    payload = std::string(payload_buf.begin(), payload_buf.end());
+
+    uint8_t term;
+    if (!readExact(fd, &term, 1) || term != TERM_BYTE) return false;
+
+    return true;
+}
+
+void Sniffer::sendTrafficLog(const json& log) {
+    if (server_fd_ == -1) return;
+
+    json traffic_log = log;
+    traffic_log["ssid"] = ssid_;
+
+    std::string payload = traffic_log.dump();
+    std::cout << "[SNIFFER] Sending log to server: " << payload.substr(0, 100) << "..." << std::endl;
+
+    if (!sendFrame(TYPE_TRAFFIC_LOG, payload)) {
+        std::cerr << "[SNIFFER] Failed to send traffic log" << std::endl;
     }
 }
 

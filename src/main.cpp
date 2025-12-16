@@ -82,14 +82,10 @@ void signalHandler(int signum) {
  * @param program_name Name of the executable (from argv[0])
  */
 void printUsage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " <interface>" << std::endl;
+    std::cout << "Usage: " << program_name << " <interface> [server_ip] [server_port]" << std::endl;
     std::cout << "Example: " << program_name << " en0" << std::endl;
+    std::cout << "Example: " << program_name << " en0 127.0.0.1 9090" << std::endl;
     std::cout << "Note: Requires root privileges (run with sudo)" << std::endl;
-    
-    // Additional helpful information could include:
-    // - List of common interface names (en0, en1, wlan0)
-    // - Instructions for finding available interfaces (ifconfig)
-    // - Link to documentation or help resources
 }
 
 /**
@@ -108,58 +104,37 @@ void printUsage(const char* program_name) {
  */
 int main(int argc, char* argv[]) {
     // === Command-Line Argument Validation ===
-    
-    // We expect exactly one argument: the network interface name
-    // argc=1 means no arguments, argc=2 means one argument (plus program name)
-    if (argc != 2) {
-        // Invalid number of arguments - show usage and exit
+
+    if (argc != 2 && argc != 4) {
         printUsage(argv[0]);
-        return 1;  // Exit with error code
+        return 1;
     }
-    
+
     // === Signal Handler Setup ===
-    
-    // Register signal handlers for graceful shutdown
-    // This allows users to stop the sniffer cleanly with Ctrl+C
-    signal(SIGINT, signalHandler);   // Handle Ctrl+C (interrupt)
-    signal(SIGTERM, signalHandler);  // Handle termination requests
-    
-    // Note: We could also handle SIGHUP for configuration reload
-    // or SIGUSR1/SIGUSR2 for runtime control, but this is a simple tool
-    
-    // === Extract Interface Name ===
-    
-    // Get the network interface name from command line
-    // Common values: "en0", "en1", "wlan0", "eth0", etc.
+
+    signal(SIGINT, signalHandler);
+    signal(SIGTERM, signalHandler);
+
+    // === Extract Arguments ===
+
     std::string interface = argv[1];
-    
+    std::string server_ip;
+    int server_port = 0;
+
+    if (argc == 4) {
+        server_ip = argv[2];
+        server_port = std::atoi(argv[3]);
+    }
+
     // === Initialize and Run Packet Sniffer ===
-    
+
     try {
-        // Create sniffer instance for the specified interface
-        // This will:
-        // 1. Open an available BPF device (/dev/bpf*)
-        // 2. Bind it to the specified network interface
-        // 3. Configure it for real-time packet capture
-        // 4. Allocate buffers for packet data
-        Sniffer sniffer(interface);
-        
-        // Start the main packet capture loop
-        // This function runs indefinitely until:
-        // - A signal is received (Ctrl+C)
-        // - An unrecoverable error occurs
-        // - The system shuts down
+        Sniffer sniffer(interface, server_ip, server_port);
         sniffer.run();
-        
+
     } catch (const std::exception& e) {
-        // Handle any errors that occur during initialization or operation
-        // Common errors:
-        // - No available BPF devices (all in use)
-        // - Invalid interface name
-        // - Insufficient privileges (not running as root)
-        // - Network interface not found or unavailable
         std::cerr << "Error: " << e.what() << std::endl;
-        return 1;  // Exit with error code
+        return 1;
     }
     
     // === Normal Termination ===

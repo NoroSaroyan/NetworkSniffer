@@ -6,3 +6,6 @@
 /docs/Claude.md
 
 /.idea
+
+./build
+./.claude

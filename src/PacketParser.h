@@ -27,6 +27,10 @@
 
 #include <sys/time.h>  // For struct timeval timestamp handling
 #include <cstddef>     // For size_t type definitions
+#include <nlohmann/json.hpp>
+#include <functional>
+
+using json = nlohmann::json;
 
 /**
  * @class PacketParser
@@ -51,6 +55,9 @@
  * input parameters and local variables.
  */
 class PacketParser {
+public:
+    using LogCallback = std::function<void(const json&)>;
+
 private:
     // ANSI color codes for traffic type visualization
     static constexpr const char* COLOR_TCP = "\033[34m";    // Blue for TCP
@@ -58,26 +65,33 @@ private:
     static constexpr const char* COLOR_ICMP = "\033[33m";   // Yellow for ICMP
     static constexpr const char* COLOR_RESET = "\033[0m";   // Reset to default
 
+    static LogCallback log_callback_;
+
 public:
+
     /**
      * @brief Main entry point for packet parsing and display
-     * 
+     *
      * This is the primary interface for packet analysis. It performs initial
      * validation and dispatches to appropriate protocol-specific parsers based
      * on the packet contents. Currently supports Ethernet frames containing
      * IPv4 packets.
-     * 
+     *
      * @param packet Pointer to raw packet data from BPF device
      * @param caplen Number of bytes captured (may be less than actual packet size)
      * @param timestamp Precise capture timestamp from kernel (microsecond accuracy)
-     * 
+     *
      * @note Performs bounds checking before accessing packet data
      * @note Silently ignores packets that are too small or malformed
      * @note Non-IPv4 packets (ARP, IPv6, etc.) are currently ignored
-     * 
+     *
      * @see parseEthernet(), struct bpf_hdr for timestamp source
      */
     static void parseAndPrint(const unsigned char* packet, size_t caplen, const struct timeval& timestamp);
+
+    static void parseToJSON(const unsigned char* packet, size_t caplen, const struct timeval& timestamp, const LogCallback& callback);
+
+    static void setLogCallback(const LogCallback& callback);
 
 private:
     /**
