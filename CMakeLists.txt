@@ -15,17 +15,23 @@ else()
     set(QT_VERSION_MAJOR 6)
 endif()
 
-add_executable(NetworkSniffer src/main.cpp
-        src/PacketParser.cpp
-        src/Sniffer.cpp
-        src/Logger.cpp)
+add_executable(NetworkSniffer
+        src/main.cpp
+        src/sniffer/PacketParser.cpp
+        src/sniffer/Sniffer.cpp
+        src/logging/Logger.cpp)
 
-add_executable(SnifferServer src/server.cpp)
+add_executable(SnifferServer src/server/server.cpp)
 
 add_executable(SnifferGUI
-        src/qt_main.cpp
-        src/MainWindow.cpp
-        src/SnifferClient.cpp)
+        src/client/qt_main.cpp
+        src/client/MainWindow.cpp
+        src/client/MainWindow.h
+        src/client/SnifferClient.cpp
+        src/client/SnifferClient.h
+        src/client/StatsWidget.cpp
+        src/client/StatsWidget.h
+        src/client/ModernStyle.h)
 
 # Link required system libraries for network packet capture
 if(APPLE)

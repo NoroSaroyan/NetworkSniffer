@@ -7,5 +7,5 @@
 
 /.idea
 
-./build
+./build/
 ./.claude

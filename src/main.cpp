@@ -17,7 +17,7 @@
  * Example: sudo ./sniffer en0
  */
 
-#include "Sniffer.h"   // Main packet capture and BPF management class
+#include "sniffer/Sniffer.h"   // Main packet capture and BPF management class
 
 #include <iostream>    // Standard I/O for user interaction
 #include <csignal>     // POSIX signal handling (SIGINT, SIGTERM)
