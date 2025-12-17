@@ -62,20 +62,10 @@
 #include <map>
 #include <cstring>
 #include <nlohmann/json.hpp>
+#include "../Protocol.h"
 
 using json = nlohmann::json;
 
-// ============================================================================
-// PROTOCOL CONSTANTS
-// ============================================================================
-
-const uint8_t PROTOCOL_VERSION = 0x01;  ///< Current protocol version
-const uint8_t TYPE_CLIENT_HELLO = 0x01; ///< Client introduction message
-const uint8_t TYPE_SERVER_HELLO = 0x02; ///< Server acknowledgment with SSID
-const uint8_t TYPE_TRAFFIC_LOG = 0x03;  ///< Traffic data from sniffer
-const uint8_t TYPE_FORWARD_LOG = 0x04;  ///< Forwarded log to GUI client
-const uint8_t TYPE_ERROR = 0x05;        ///< Error notification
-const uint8_t TERM_BYTE = 0x0A;         ///< Frame terminator (newline)
 
 // ============================================================================
 // DATA STRUCTURES
@@ -154,7 +144,7 @@ bool readExact(int fd, void* buf, size_t len) {
  * Frame format: [Version:1][Type:1][Length:2][Payload:N][Terminator:1]
  *
  * Validates:
- * - Protocol version matches PROTOCOL_VERSION
+ * - Protocol version matches Protocol::VERSION
  * - Payload length is reasonable (< 1024 bytes)
  * - Frame is properly terminated with TERM_BYTE
  *
@@ -175,7 +165,7 @@ bool readFrame(int fd, Frame& frame) {
     std::cout << "[DEBUG] Header bytes: " << (int)header[0] << " " << (int)header[1] << " " << (int)header[2] << " " << (int)header[3] << std::endl;
 
     uint8_t version = header[0];
-    if (version != PROTOCOL_VERSION) {
+    if (version != Protocol::VERSION) {
         std::cerr << "Invalid protocol version: " << (int)version << std::endl;
         return false;
     }
@@ -203,7 +193,7 @@ bool readFrame(int fd, Frame& frame) {
         return false;
     }
 
-    if (term != TERM_BYTE) {
+    if (term != Protocol::TERM_BYTE) {
         std::cerr << "Invalid terminator byte: " << (int)term << std::endl;
         return false;
     }
@@ -219,7 +209,7 @@ bool readFrame(int fd, Frame& frame) {
  * [Version:1][Type:1][Length:2][Payload:N][Terminator:1]
  *
  * @param fd Socket file descriptor
- * @param type Message type (TYPE_SERVER_HELLO, TYPE_FORWARD_LOG, etc.)
+ * @param type Message type (Protocol::SERVER_HELLO, Protocol::FORWARD_LOG, etc.)
  * @param payload JSON string to send (must be < 1024 bytes)
  * @return true if frame was sent successfully, false on error
  *
@@ -229,14 +219,14 @@ bool sendFrame(int fd, uint8_t type, const std::string& payload) {
     if (payload.length() > 1024) return false;
 
     uint8_t header[4];
-    header[0] = PROTOCOL_VERSION;
+    header[0] = Protocol::VERSION;
     header[1] = type;
     header[2] = (payload.length() >> 8) & 0xFF;
     header[3] = payload.length() & 0xFF;
 
     if (write(fd, header, 4) != 4) return false;
     if (write(fd, payload.data(), payload.length()) != (ssize_t)payload.length()) return false;
-    if (write(fd, &TERM_BYTE, 1) != 1) return false;
+    if (write(fd, &Protocol::TERM_BYTE, 1) != 1) return false;
 
     return true;
 }
@@ -331,7 +321,7 @@ void handleClient(int client_fd, const std::string& client_ip) {
 
     std::cout << "[SERVER] Received frame type: " << (int)frame.type << ", payload size: " << frame.payload.size() << std::endl;
 
-    if (frame.type == TYPE_CLIENT_HELLO) {
+    if (frame.type == Protocol::CLIENT_HELLO) {
         try {
             std::cout << "[SERVER] Parsing CLIENT_HELLO payload..." << std::endl;
             std::cout.flush();
@@ -367,7 +357,7 @@ void handleClient(int client_fd, const std::string& client_ip) {
                 response["ip"] = client_ip;
                 response["registered"] = true;
 
-                if (!sendFrame(client_fd, TYPE_SERVER_HELLO, response.dump())) {
+                if (!sendFrame(client_fd, Protocol::SERVER_HELLO, response.dump())) {
                     close(client_fd);
                     return;
                 }
@@ -390,7 +380,7 @@ void handleClient(int client_fd, const std::string& client_ip) {
             if (is_sniffer) {
                 // SNIFFER HANDLER: Receive logs and broadcast to GUIs
                 while (readFrame(client_fd, frame)) {
-                    if (frame.type == TYPE_TRAFFIC_LOG) {
+                    if (frame.type == Protocol::TRAFFIC_LOG) {
                         // Parse the traffic log JSON from sniffer
                         json log_payload = json::parse(frame.payload);
 
@@ -407,7 +397,7 @@ void handleClient(int client_fd, const std::string& client_ip) {
                             for (const auto& c : clients) {
                                 if (!c.is_sniffer) {
                                     // Send FORWARD_LOG frame to GUI client
-                                    sendFrame(c.fd, TYPE_FORWARD_LOG, forward_str);
+                                    sendFrame(c.fd, Protocol::FORWARD_LOG, forward_str);
                                 }
                             }
                         } // Lock released

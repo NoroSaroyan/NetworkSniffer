@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
+#include "../Protocol.h"
 
 using json = nlohmann::json;
 

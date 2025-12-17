@@ -12,6 +12,7 @@
 #include "SnifferClient.h"
 #include <QDebug>
 #include <stdexcept>
+#include <sys/socket.h>
 
 // ============================================================================
 // CONSTRUCTOR / DESTRUCTOR
@@ -109,7 +110,7 @@ bool SnifferClient::isConnected() const {
  * Performs the CLIENT_HELLO handshake:
  *
  * 1. Construct CLIENT_HELLO JSON with type="gui" and hostname="Qt GUI Client"
- * 2. Encode into binary frame: [PROTOCOL_VERSION][TYPE_CLIENT_HELLO][Length][Payload][TERM_BYTE]
+ * 2. Encode into binary frame: [Protocol::VERSION][Protocol::CLIENT_HELLO][Length][Payload][Protocol::TERM_BYTE]
  * 3. Write frame to socket
  * 4. Flush socket to ensure data is sent
  * 5. Emit connected() signal
@@ -135,8 +136,8 @@ void SnifferClient::onConnected() {
     // ================================================================
     // Frame format: [Version:1][Type:1][Length:2][Payload:N][Terminator:1]
     uint8_t header[4];
-    header[0] = PROTOCOL_VERSION;
-    header[1] = TYPE_CLIENT_HELLO;
+    header[0] = Protocol::VERSION;
+    header[1] = Protocol::CLIENT_HELLO;
     header[2] = (payload.length() >> 8) & 0xFF;  // High byte of length
     header[3] = payload.length() & 0xFF;         // Low byte of length
 
@@ -146,7 +147,7 @@ void SnifferClient::onConnected() {
     qint64 bytes_written = 0;
     bytes_written += socket_->write(QByteArray((const char*)header, 4));
     bytes_written += socket_->write(QByteArray(payload.c_str(), payload.length()));
-    bytes_written += socket_->write(QByteArray((const char*)&TERM_BYTE, 1));
+    bytes_written += socket_->write(QByteArray((const char*)&Protocol::TERM_BYTE, 1));
 
     qDebug() << "[GUI] Sent CLIENT_HELLO, bytes written:" << bytes_written;
     socket_->flush();
@@ -222,10 +223,10 @@ void SnifferClient::onError(QAbstractSocket::SocketError error) {
  *
  * Returns false if:
  * - Buffer has fewer than HEADER_SIZE (4) bytes (incomplete frame)
- * - Protocol version doesn't match PROTOCOL_VERSION (protocol mismatch)
+ * - Protocol version doesn't match Protocol::VERSION (protocol mismatch)
  * - Payload length > 1024 (invalid/corrupted)
  * - Buffer has fewer bytes than needed for complete frame (still incomplete)
- * - Terminator byte doesn't match TERM_BYTE (corrupted)
+ * - Terminator byte doesn't match Protocol::TERM_BYTE (corrupted)
  *
  * On success:
  * - Parses frame.type and frame.payload
@@ -254,7 +255,7 @@ bool SnifferClient::readFrame(Frame& frame) {
     // STEP 2: Validate protocol version
     // ================================================================
     uint8_t version = static_cast<uint8_t>(read_buffer_[0]);
-    if (version != PROTOCOL_VERSION) {
+    if (version != Protocol::VERSION) {
         qWarning() << "Invalid protocol version:" << version;
         read_buffer_.clear();  // Corrupted - discard everything
         return false;
@@ -279,7 +280,7 @@ bool SnifferClient::readFrame(Frame& frame) {
     // ================================================================
     // STEP 5: Check if we have the complete frame (header + payload + terminator)
     // ================================================================
-    int total_size = HEADER_SIZE + length + 1;  // +1 for TERM_BYTE
+    int total_size = HEADER_SIZE + length + 1;  // +1 for Protocol::TERM_BYTE
     if (read_buffer_.size() < total_size) {
         return false;  // Incomplete - wait for more data
     }
@@ -293,7 +294,7 @@ bool SnifferClient::readFrame(Frame& frame) {
     // STEP 7: Validate terminator byte
     // ================================================================
     uint8_t term = static_cast<uint8_t>(read_buffer_[HEADER_SIZE + length]);
-    if (term != TERM_BYTE) {
+    if (term != Protocol::TERM_BYTE) {
         qWarning() << "Invalid terminator byte:" << term;
         read_buffer_.clear();  // Corrupted - discard everything
         return false;
@@ -310,16 +311,16 @@ bool SnifferClient::readFrame(Frame& frame) {
  * @brief Dispatch a parsed frame to appropriate handler based on type
  *
  * Frame types:
- * - TYPE_FORWARD_LOG (0x04): Traffic log from sniffer for GUI display
+ * - Protocol::FORWARD_LOG (0x04): Traffic log from sniffer for GUI display
  *   - Parses JSON containing ssid and log fields
  *   - Emits forwardLogReceived() signal
  *   - GUI will organize logs by ssid in tabs
  *
- * - TYPE_SERVER_HELLO (0x02): Server acknowledgment (usually handled by server)
+ * - Protocol::SERVER_HELLO (0x02): Server acknowledgment (usually handled by server)
  *   - Contains assigned SSID for this connection
  *   - Logged but not used by GUI
  *
- * - TYPE_ERROR (0x05): Error message from server
+ * - Protocol::ERROR (0x05): Error message from server
  *   - Logged as warning
  *   - Payload contains error description
  *
@@ -333,7 +334,7 @@ void SnifferClient::processFrame(const Frame& frame) {
     try {
         qDebug() << "Received frame type:" << (int)frame.type;
 
-        if (frame.type == TYPE_FORWARD_LOG) {
+        if (frame.type == Protocol::FORWARD_LOG) {
             // ================================================================
             // FORWARD_LOG: Traffic log from sniffer for GUI display
             // ================================================================
@@ -349,7 +350,7 @@ void SnifferClient::processFrame(const Frame& frame) {
             } else {
                 qDebug() << "Frame missing ssid or log fields";
             }
-        } else if (frame.type == TYPE_ERROR) {
+        } else if (frame.type == Protocol::ERROR) {
             // ================================================================
             // ERROR: Error notification from server
             // ================================================================

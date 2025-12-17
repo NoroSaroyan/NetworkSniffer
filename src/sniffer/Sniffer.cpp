@@ -1,5 +1,6 @@
 #include "Sniffer.h"
 #include "PacketParser.h"
+#include "../Protocol.h"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -16,12 +17,6 @@
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
-
-const uint8_t PROTOCOL_VERSION = 0x01;
-const uint8_t TYPE_CLIENT_HELLO = 0x01;
-const uint8_t TYPE_SERVER_HELLO = 0x02;
-const uint8_t TYPE_TRAFFIC_LOG = 0x03;
-const uint8_t TERM_BYTE = 0x0A;
 
 /**
  * @brief Constructor: Initialize BPF device and configure for specified interface
@@ -180,7 +175,7 @@ void Sniffer::sendClientHello() {
     hello["hostname"] = hostname;
     hello["interface"] = iface_;
 
-    if (!sendFrame(TYPE_CLIENT_HELLO, hello.dump())) {
+    if (!sendFrame(Protocol::CLIENT_HELLO, hello.dump())) {
         throw std::runtime_error("Failed to send CLIENT_HELLO");
     }
     std::cout << "Sent CLIENT_HELLO" << std::endl;
@@ -190,7 +185,7 @@ void Sniffer::receiveServerHello() {
     uint8_t type;
     std::string payload;
 
-    if (!readFrame(server_fd_, type, payload) || type != TYPE_SERVER_HELLO) {
+    if (!readFrame(server_fd_, type, payload) || type != Protocol::SERVER_HELLO) {
         throw std::runtime_error("Failed to receive SERVER_HELLO");
     }
 
@@ -207,14 +202,14 @@ bool Sniffer::sendFrame(uint8_t type, const std::string& payload) {
     if (payload.length() > 1024) return false;
 
     uint8_t header[4];
-    header[0] = PROTOCOL_VERSION;
+    header[0] = Protocol::VERSION;
     header[1] = type;
     header[2] = (payload.length() >> 8) & 0xFF;
     header[3] = payload.length() & 0xFF;
 
     if (write(server_fd_, header, 4) != 4) return false;
     if (write(server_fd_, payload.data(), payload.length()) != (ssize_t)payload.length()) return false;
-    if (write(server_fd_, &TERM_BYTE, 1) != 1) return false;
+    if (write(server_fd_, &Protocol::TERM_BYTE, 1) != 1) return false;
 
     return true;
 }
@@ -233,7 +228,7 @@ bool Sniffer::readFrame(int fd, uint8_t& type, std::string& payload) {
     uint8_t header[4];
     if (!readExact(fd, header, 4)) return false;
 
-    if (header[0] != PROTOCOL_VERSION) return false;
+    if (header[0] != Protocol::VERSION) return false;
 
     type = header[1];
     uint16_t length = (header[2] << 8) | header[3];
@@ -245,7 +240,7 @@ bool Sniffer::readFrame(int fd, uint8_t& type, std::string& payload) {
     payload = std::string(payload_buf.begin(), payload_buf.end());
 
     uint8_t term;
-    if (!readExact(fd, &term, 1) || term != TERM_BYTE) return false;
+    if (!readExact(fd, &term, 1) || term != Protocol::TERM_BYTE) return false;
 
     return true;
 }
@@ -259,7 +254,7 @@ void Sniffer::sendTrafficLog(const json& log) {
     std::string payload = traffic_log.dump();
     std::cout << "[SNIFFER] Sending log to server: " << payload.substr(0, 100) << "..." << std::endl;
 
-    if (!sendFrame(TYPE_TRAFFIC_LOG, payload)) {
+    if (!sendFrame(Protocol::TRAFFIC_LOG, payload)) {
         std::cerr << "[SNIFFER] Failed to send traffic log" << std::endl;
     }
 }

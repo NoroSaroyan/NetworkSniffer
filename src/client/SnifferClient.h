@@ -43,6 +43,7 @@
 #include <QTcpSocket>
 #include <QByteArray>
 #include <nlohmann/json.hpp>
+#include "../Protocol.h"
 
 using json = nlohmann::json;
 
@@ -253,12 +254,5 @@ private:
     QTcpSocket* socket_;            ///< TCP socket for server communication
     QByteArray read_buffer_;        ///< Accumulator for partial frame data
 
-    // Protocol constants - must match server.cpp definitions
-    static constexpr uint8_t PROTOCOL_VERSION = 0x01;   ///< Current protocol version
-    static constexpr uint8_t TYPE_CLIENT_HELLO = 0x01;  ///< Client introduction message
-    static constexpr uint8_t TYPE_SERVER_HELLO = 0x02;  ///< Server acknowledgment with SSID
-    static constexpr uint8_t TYPE_TRAFFIC_LOG = 0x03;   ///< Traffic data from sniffer
-    static constexpr uint8_t TYPE_FORWARD_LOG = 0x04;   ///< Forwarded log to GUI client
-    static constexpr uint8_t TYPE_ERROR = 0x05;         ///< Error notification
-    static constexpr uint8_t TERM_BYTE = 0x0A;          ///< Frame terminator (newline)
+    // Protocol constants defined in Protocol.h (shared across all components)
 };

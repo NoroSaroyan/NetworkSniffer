@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <QWidget>
 #include <QLabel>
 #include <QMap>
@@ -24,7 +25,7 @@ public:
      * @param protocolCounts Map of protocol name to count
      * @param totalBytes Total bytes captured
      */
-    void updateStats(uint32_t totalPackets, const QMap<QString, uint32_t>& protocolCounts, uint64_t totalBytes);
+    void updateStats(std::uint32_t totalPackets, const QMap<QString, uint32_t>& protocolCounts, uint64_t totalBytes);
 
     /**
      * @brief Reset statistics
