@@ -1,29 +1,190 @@
-# Technical Architecture Documentation
+# System Architecture - NetworkSniffer Distributed System
 
-## Network Sniffer - Deep Technical Analysis
+## Overview
 
-This document provides an in-depth technical analysis of the network sniffer implementation, covering system architecture, design patterns, performance characteristics, and implementation details.
+NetworkSniffer is a three-tier distributed network monitoring system consisting of:
+
+1. **Sniffer Nodes** - BPF-based packet capture clients that operate independently
+2. **Central Server** - TCP hub that aggregates logs and manages connections
+3. **GUI Client** - Real-time monitoring interface for traffic analysis
+
+This document provides comprehensive technical analysis of the system architecture, design patterns, network protocol,
+and implementation details.
 
 ## Table of Contents
 
-1. [System Architecture Overview](#system-architecture-overview)
-2. [Berkeley Packet Filter (BPF) Integration](#berkeley-packet-filter-bpf-integration)
-3. [Protocol Stack Implementation](#protocol-stack-implementation)
-4. [Memory Management Strategy](#memory-management-strategy)
-5. [Performance Analysis](#performance-analysis)
-6. [Security Considerations](#security-considerations)
-7. [Error Handling and Robustness](#error-handling-and-robustness)
-8. [Extensibility and Future Enhancements](#extensibility-and-future-enhancements)
+1. [High-Level System Architecture](#high-level-system-architecture)
+2. [Component Overview](#component-overview)
+3. [Network Communication](#network-communication)
+4. [Berkeley Packet Filter (BPF) Integration](#berkeley-packet-filter-bpf-integration)
+5. [Protocol Stack Implementation](#protocol-stack-implementation)
+6. [Memory Management Strategy](#memory-management-strategy)
+7. [Performance Analysis](#performance-analysis)
+8. [Security Considerations](#security-considerations)
+9. [Error Handling and Robustness](#error-handling-and-robustness)
+10. [Extensibility and Future Enhancements](#extensibility-and-future-enhancements)
 
 ---
 
-## System Architecture Overview
+## High-Level System Architecture
+
+### Distributed System Design
+
+The NetworkSniffer system follows a client-server architecture pattern optimized for network traffic monitoring:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     User Space Applications                         │
+├──────────────────┬──────────────────────┬────────────────────────── ┤
+│ Sniffer Node #1  │ Sniffer Node #2      │ Sniffer Node #N           │
+│ (en0, SSID: 1)   │ (en1, SSID: 2)       │ (enX, SSID: N)            │
+│ BPF Capture      │ BPF Capture          │ BPF Capture               │
+│ Packet Parser    │ Packet Parser        │ Packet Parser             │
+│ JSON Encoding    │ JSON Encoding        │ JSON Encoding             │
+└────────┬─────────┴────────┬─────────────┴──────────┬────────────────┘
+         │                  │                        │
+         │ TCP Connection   │ TCP Connection         │ TCP Connection
+         │ Custom Protocol  │ Custom Protocol        │ Custom Protocol
+         ▼                  ▼                        ▼
+       ┌─────────────────────────────────────────────┐
+       │         Central TCP Server                  │
+       │  ┌───────────────────────────────────────┐  │
+       │  │ Connection Manager                    │  │
+       │  │ - Accept incoming connections         │  │
+       │  │ - Identify client type (Sniffer/GUI)  │  │
+       │  │ - Assign Session IDs (SSID)           │  │
+       │  │ - Track active clients                │  │
+       │  └───────────────────────────────────────┘  │
+       │  ┌───────────────────────────────────────┐  │
+       │  │ Message Router                        │  │
+       │  │ - Parse binary protocol frames        │  │
+       │  │ - Aggregate TRAFFIC_LOG messages      │  │
+       │  │ - Forward logs to all GUI clients     │  │
+       │  └───────────────────────────────────────┘  │
+       └──────────────┬──────────────────────────────┘
+                      │
+        ┌─────────────┴─────────────┐
+        │ TCP Connection            │ TCP Connection
+        │ Custom Protocol           │ Custom Protocol
+        ▼                           ▼
+   ┌──────────────────┐      ┌──────────────────┐
+   │  Qt GUI Client   │      │  Qt GUI Client   │
+   │  - MainWindow    │      │  - MainWindow    │
+   │  - Log Tables    │      │  - Log Tables    │
+   │  - Statistics    │      │  - Statistics    │
+   └──────────────────┘      └──────────────────┘
+```
+
+### Key Design Characteristics
+
+1. **Multi-Tiered Architecture**: Clear separation between capture (sniffers), routing (server), and presentation (GUI)
+2. **Horizontal Scalability**: Add unlimited sniffer nodes; single server aggregates all traffic
+3. **Asynchronous Communication**: TCP-based protocol allows non-blocking message exchange
+4. **Session Management**: SSID (Session ID) uniquely identifies each sniffer for log routing
+5. **Real-Time Processing**: Immediate packet capture and display with minimal latency
+
+---
+
+## Component Overview
+
+### Sniffer Node
+
+**Purpose**: Capture packets via BPF and forward logs to central server.
+
+**Responsibilities**:
+
+- Initialize BPF device (`/dev/bpfX`)
+- Bind to specified network interface
+- Capture packets in real-time loop
+- Parse network protocol headers (Ethernet → IPv4/IPv6 → TCP/UDP/ICMP)
+- Encode packet information as JSON
+- Send TRAFFIC_LOG messages to server over TCP
+- Handle graceful shutdown and error conditions
+
+**Location**: `src/sniffer/`
+
+**Key Classes**:
+
+- `Sniffer` - Manages BPF device and packet capture loop
+- `PacketParser` - Parses protocol headers and extracts packet information
+- `main.cpp` - CLI interface and application lifecycle
+
+**Network Role**: TCP Client
+
+- Initiates connection to server
+- Sends CLIENT_HELLO message (introduces self)
+- Receives SERVER_HELLO with assigned SSID
+- Continuously sends TRAFFIC_LOG frames
+
+### Central Server
+
+**Purpose**: Accept connections from sniffers and GUI clients, route traffic logs.
+
+**Responsibilities**:
+
+- Listen on specified TCP port (default 9090)
+- Accept incoming client connections
+- Differentiate between sniffer and GUI clients via CLIENT_HELLO payload
+- Assign unique SSID to each sniffer
+- Maintain connection state for all clients
+- Receive TRAFFIC_LOG from sniffers
+- Broadcast FORWARD_LOG to all connected GUI clients
+- Handle client disconnections and errors
+
+**Location**: `src/server/server.cpp`
+
+**Design Pattern**: Thread-per-client
+
+- Each client connection handled in separate thread
+- Allows concurrent handling of multiple sniffers and GUI clients
+- Thread-safe client registry using locks
+
+**Network Role**: TCP Server
+
+- Listens on port (configurable)
+- Accepts both sniffer and GUI client connections
+- Forwards logs in real-time to all GUI clients
+
+### GUI Client
+
+**Purpose**: Visualize and analyze captured network traffic in real-time.
+
+**Responsibilities**:
+
+- Connect to central server via TCP
+- Send CLIENT_HELLO identifying as GUI client
+- Receive FORWARD_LOG messages from server
+- Parse and decode JSON payloads
+- Display traffic in organized table view (tabs by SSID)
+- Calculate and display statistics
+- Handle server disconnection and reconnection
+
+**Location**: `src/client/`
+
+**Key Components**:
+
+- `MainWindow` - Main application window
+- `SnifferClient` - TCP client for server communication
+- `StatsWidget` - Traffic statistics display
+- `ModernStyle` - UI styling
+
+**Framework**: Qt 5.15+/6.x (multi-platform GUI framework)
+
+**Network Role**: TCP Client
+
+- Connects to server
+- Receives log messages
+- Displays in real-time table interface
+
+---
+
+## Network Communication
 
 ### High-Level Component Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        User Space Application                      │
+│                        User Space Application                       │
 ├─────────────────┬─────────────────┬─────────────────┬───────────────┤
 │   main.cpp      │   Sniffer.cpp   │PacketParser.cpp │   Output      │
 │                 │                 │                 │               │
@@ -36,28 +197,28 @@ This document provides an in-depth technical analysis of the network sniffer imp
                   │                 │                 │
                   ▼                 ▼                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        System Call Interface                       │
+│                        System Call Interface                        │
 ├─────────────────┬─────────────────┬─────────────────┬───────────────┤
-│ open("/dev/bpf*")│ ioctl(BIOCSETIF)│ read(fd, buf)   │ Signal Mgmt   │
+│open("/dev/bpf*")│ ioctl(BIOCSETIF)│ read(fd, buf)   │ Signal Mgmt   │
 │ File Descriptor │ Interface Bind  │ Packet Data     │ SIGINT/SIGTERM│
 │ Management      │ Configuration   │ Retrieval       │ Handling      │
 └─────────────────┼─────────────────┼─────────────────┼───────────────┘
                   │                 │                 │
                   ▼                 ▼                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      macOS Kernel (XNU)                            │
+│                      macOS Kernel (XNU)                             │
 ├─────────────────┬─────────────────┬─────────────────┬───────────────┤
 │ BPF Subsystem   │ Network Stack   │ Driver Layer    │ Signal System │
 │                 │                 │                 │               │
 │ • Device Files  │ • TCP/IP Stack  │ • Interface     │ • Process     │
-│ • Packet Filter│ • Protocol      │   Drivers       │   Management  │
+│ • Packet Filter │ • Protocol      │   Drivers       │   Management  │
 │ • Buffer Mgmt   │   Processing    │ • Hardware      │ • IPC         │
 │ • Access Control│ • Routing       │   Abstraction   │ • Scheduling  │
 └─────────────────┼─────────────────┼─────────────────┼───────────────┘
                   │                 │                 │
                   ▼                 ▼                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                       Hardware Layer                               │
+│                       Hardware Layer                                │
 ├─────────────────┬─────────────────┬─────────────────┬───────────────┤
 │ Network         │ CPU             │ Memory          │ Interrupts    │
 │ Interface       │                 │                 │               │
@@ -108,7 +269,8 @@ Network Packet Journey: Wire → Application
 
 ### BPF Device Architecture
 
-Berkeley Packet Filter provides a raw interface to network packets at the link layer. Our implementation interacts with BPF through the following mechanisms:
+Berkeley Packet Filter provides a raw interface to network packets at the link layer. Our implementation interacts with
+BPF through the following mechanisms:
 
 #### Device Discovery and Allocation
 
@@ -216,6 +378,7 @@ int header_length = (ip->ip_vhl & 0x0F) * 4;  // Convert words to bytes
 #### Layer 4 - Transport Protocol Analysis
 
 **TCP Segment Structure:**
+
 ```cpp
 struct tcphdr {
     uint16_t th_sport;   // Source Port
@@ -232,6 +395,7 @@ struct tcphdr {
 ```
 
 **UDP Datagram Structure:**
+
 ```cpp
 struct udphdr {
     uint16_t uh_sport;   // Source Port
@@ -335,16 +499,17 @@ buffer_.resize(bufsize);          // Allocate once, reuse forever
 
 Based on testing and architectural analysis:
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Packet Rate | 1000+ pps | Tested with real traffic |
-| CPU Usage | <5% | Single core, modern hardware |
-| Memory Usage | 4KB-64KB | Fixed buffer size |
-| Latency | <1ms | Immediate mode processing |
+| Metric       | Value     | Notes                        |
+|--------------|-----------|------------------------------|
+| Packet Rate  | 1000+ pps | Tested with real traffic     |
+| CPU Usage    | <5%       | Single core, modern hardware |
+| Memory Usage | 4KB-64KB  | Fixed buffer size            |
+| Latency      | <1ms      | Immediate mode processing    |
 
 ### Performance Optimization Techniques
 
 #### 1. Zero-Copy Architecture
+
 ```cpp
 // No packet copying - direct buffer access
 const struct ip* ip_hdr = 
@@ -352,6 +517,7 @@ const struct ip* ip_hdr =
 ```
 
 #### 2. Batch Processing
+
 ```cpp
 // Process multiple packets per system call
 ssize_t bytes_read = read(fd_, buffer_.data(), buffer_.size());
@@ -359,6 +525,7 @@ ssize_t bytes_read = read(fd_, buffer_.data(), buffer_.size());
 ```
 
 #### 3. Efficient Parsing
+
 ```cpp
 // Minimal allocations in hot path
 // Static buffers for timestamp formatting
@@ -366,6 +533,7 @@ ssize_t bytes_read = read(fd_, buffer_.data(), buffer_.size());
 ```
 
 #### 4. Compiler Optimizations
+
 ```makefile
 CXXFLAGS=-std=c++17 -Wall -Wextra -O2
 # -O2 enables:
@@ -389,6 +557,7 @@ CXXFLAGS=-std=c++17 -Wall -Wextra -O2
 ### Privilege Requirements
 
 #### Root Access Necessity
+
 ```bash
 # BPF devices require root privileges
 sudo ./sniffer en0
@@ -400,6 +569,7 @@ sudo ./sniffer en0
 ```
 
 #### Privilege Minimization Strategies
+
 ```cpp
 // Future enhancements could include:
 // 1. Capability-based security (CAP_NET_RAW)
@@ -411,11 +581,13 @@ sudo ./sniffer en0
 ### Attack Surface Analysis
 
 #### Input Validation
+
 - **Malformed Packets**: All parsing includes bounds checking
 - **Buffer Overflows**: std::vector provides bounds safety
 - **Integer Overflows**: Careful size calculations and validation
 
 #### Information Disclosure
+
 - **Packet Content**: Tool shows headers only, not payload data
 - **Network Topology**: Reveals local network structure
 - **Traffic Patterns**: Could expose application usage patterns
@@ -423,11 +595,13 @@ sudo ./sniffer en0
 ### Ethical Usage Framework
 
 #### Legal Compliance
+
 - **Authorized Networks Only**: Monitor only owned/permitted networks
 - **Data Privacy**: Be mindful of sensitive information in headers
 - **Regulatory Compliance**: Follow local network monitoring laws
 
 #### Technical Safeguards
+
 - **Read-Only Access**: No packet injection or modification capabilities
 - **Local Interface**: Limited to single network interface
 - **No Persistence**: No logging or storage of captured data
@@ -454,6 +628,7 @@ Sniffer::Sniffer(const std::string& iface) try : iface_(iface) {
 ### Error Recovery Strategies
 
 #### Transient Errors
+
 ```cpp
 // Read errors are often transient - continue operation
 ssize_t bytes_read = read(fd_, buffer_.data(), buffer_.size());
@@ -463,6 +638,7 @@ if (bytes_read <= 0) {
 ```
 
 #### Fatal Errors
+
 ```cpp
 // Configuration errors are fatal - terminate gracefully
 if (ioctl(fd_, BIOCSETIF, &ifr) == -1) {
@@ -491,6 +667,7 @@ signal(SIGTERM, signalHandler);  // System shutdown
 ### Architectural Extension Points
 
 #### 1. Protocol Support Expansion
+
 ```cpp
 // Current: Ethernet → IPv4 → TCP/UDP
 // Possible additions:
@@ -510,6 +687,7 @@ void parseEthernet(const unsigned char* packet, size_t caplen,
 ```
 
 #### 2. Output Format Extensions
+
 ```cpp
 // Current: Console text output
 // Possible additions:
@@ -530,6 +708,7 @@ class PCAPFormatter : public OutputFormatter { /* future */ };
 ```
 
 #### 3. Filtering and Analysis
+
 ```cpp
 // Current: Capture all packets
 // Possible additions:
@@ -550,6 +729,7 @@ class AddressFilter : public PacketFilter { /* filter by IP */ };
 ```
 
 #### 4. Performance Enhancements
+
 ```cpp
 // Current: Single-threaded processing
 // Possible improvements:
@@ -570,12 +750,14 @@ private:
 ### Integration Opportunities
 
 #### System Integration
+
 - **Systemd Service**: Run as system daemon
 - **Configuration Files**: External configuration support
 - **Log Integration**: Syslog/journald integration
 - **Monitoring APIs**: REST API for remote monitoring
 
-#### Development Integration  
+#### Development Integration
+
 - **Unit Testing**: Comprehensive test suite with mock interfaces
 - **Continuous Integration**: Automated testing and deployment
 - **Documentation**: API documentation and user manuals
@@ -588,11 +770,13 @@ private:
 This network sniffer implementation demonstrates a sophisticated understanding of:
 
 - **Systems Programming**: Direct kernel interface usage
-- **Network Protocols**: Multi-layer protocol stack analysis  
+- **Network Protocols**: Multi-layer protocol stack analysis
 - **Performance Engineering**: Zero-copy, efficient algorithms
 - **Security Awareness**: Defensive programming and privilege management
 - **Software Architecture**: Clean, extensible design patterns
 
-The codebase serves as an excellent educational example of low-level network programming while providing a practical tool for network analysis and monitoring.
+The codebase serves as an excellent educational example of low-level network programming while providing a practical
+tool for network analysis and monitoring.
 
-The architecture is designed for both immediate utility and future enhancement, making it suitable for educational purposes, professional development, and as a foundation for more advanced network monitoring tools.
+The architecture is designed for both immediate utility and future enhancement, making it suitable for educational
+purposes, professional development, and as a foundation for more advanced network monitoring tools.
