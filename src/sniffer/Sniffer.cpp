@@ -85,24 +85,82 @@ int Sniffer::openBpfDevice() {
 }
 
 void Sniffer::configureInterface() {
+    // BPF CONFIGURATION SEQUENCE
+    // =================================================================
+    // This function performs the critical initialization of the BPF device:
+    // 1. Bind to the target network interface
+    // 2. Set capture mode (immediate vs buffered)
+    // 3. Query and allocate capture buffer
+    //
+    // Each step must complete successfully before proceeding to next.
+    // Any ioctl() failure indicates a configuration problem (permissions,
+    // invalid interface, BPF not available, etc.).
+
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
     strncpy(ifr.ifr_name, iface_.c_str(), IFNAMSIZ - 1);
-    
+
+    // STEP 1: Bind BPF device to network interface
+    // ===============================================
+    // BIOCSETIF: "BPF I/O Control - SET InterFace"
+    // Tells the BPF device which network interface to capture from
+    //
+    // Why memset and strncpy pattern?
+    // - memset: Null-initialize entire struct (avoid garbage data)
+    // - strncpy with IFNAMSIZ-1: Reserve 1 byte for null terminator
+    //   If iface is longer than IFNAMSIZ-1, it will be truncated and null-terminated
+    //   This prevents buffer overrun
     if (ioctl(fd_, BIOCSETIF, &ifr) == -1) {
         throw std::runtime_error("Failed to bind to interface " + iface_);
     }
-    
+
+    // STEP 2: Enable IMMEDIATE MODE
+    // ===============================================
+    // BIOCIMMEDIATE: Capture packets as soon as available
+    //
+    // Trade-off: Latency vs Throughput
+    //
+    // Immediate Mode (what we use):
+    // - Packets delivered as soon as captured by NIC
+    // - Low latency: <10ms typically
+    // - Higher CPU usage: frequent small reads
+    // - Good for real-time monitoring (our use case)
+    //
+    // Alternative - Buffer Mode (BIOCIMMEDIATE=0):
+    // - OS buffers packets in BPF buffer
+    // - Higher throughput: batch process many packets per read()
+    // - Higher latency: wait for buffer to fill
+    // - Good for high-speed captures (>100K pps)
+    //
+    // Our choice: Immediate mode prioritizes latency for monitoring
     u_int enable = 1;
     if (ioctl(fd_, BIOCIMMEDIATE, &enable) == -1) {
         throw std::runtime_error("Failed to set immediate mode");
     }
-    
+
+    // STEP 3: Query BPF buffer size
+    // ===============================================
+    // BIOCGBLEN: "BPF I/O Control - GET Buffer LENgth"
+    //
+    // Why query instead of hardcoding?
+    // - BPF buffer size determined by OS kernel
+    // - Depends on system config, available memory, interface speed
+    // - Typical sizes: 4KB (slow), 32KB (normal), 64KB (fast network)
+    // - Querying is idiomatic: "Ask the OS what it wants to use"
+    //
+    // The kernel optimizes this value based on:
+    // - Physical memory available
+    // - Interface speed (faster = bigger buffer)
+    // - Current system load
+    // - Tunable kernel parameters
+    //
+    // We then allocate a std::vector of this exact size.
+    // Using std::vector provides RAII semantics: auto-freed on destruction
     u_int bufsize;
     if (ioctl(fd_, BIOCGBLEN, &bufsize) == -1) {
         throw std::runtime_error("Failed to get buffer size");
     }
-    
+
     buffer_.resize(bufsize);
     std::cout << "Attached to " << iface_ << " (bpf buf " << bufsize << " bytes)" << std::endl;
 }
@@ -112,36 +170,109 @@ void Sniffer::run() {
 }
 
 void Sniffer::doReadLoop() {
+    // PACKET CAPTURE MAIN LOOP
+    // =================================================================
+    // This function reads captured packets from the BPF device and processes them.
+    // It demonstrates several important concepts:
+    // 1. Batch processing: multiple packets per read()
+    // 2. Zero-copy access: pointers into kernel buffer
+    // 3. Memory alignment: struct packing and word boundaries
+    // 4. Bounds checking: prevent reading past buffer end
+
     while (true) {
+        // STEP 1: Read raw packet buffer from BPF device
+        // ===============================================
+        // read() returns the number of bytes available in the BPF buffer
+        // The buffer contains one or more packets in BPF wire format
+        //
+        // BPF Wire Format:
+        // +---+---+---+---+---+---+
+        // | bpf_hdr | packet data | bpf_hdr | packet data | ...
+        // +---+---+---+---+---+---+
+        //
+        // Each bpf_hdr tells us:
+        // - bh_hdrlen: Size of the header itself (usually 18 bytes)
+        // - bh_caplen: Size of the captured packet data
+        // - bh_datalen: Size of the original packet (if truncated, larger than caplen)
+        // - bh_tstamp: Timestamp when packet was captured
+        //
+        // bytes_read: Total bytes in this read (typically 32KB)
+        // This single read() may contain 10-1000 packets depending on traffic
+
         ssize_t bytes_read = read(fd_, buffer_.data(), buffer_.size());
         if (bytes_read <= 0) {
-            continue;
+            continue;  // No data or error; retry
         }
-        
-        unsigned char* ptr = buffer_.data();
-        unsigned char* end = ptr + bytes_read;
-        
+
+        // STEP 2: Parse multiple packets from single buffer
+        // ===============================================
+        // Now iterate through all packets in this buffer
+        // Each iteration processes one bpf_hdr + packet pair
+
+        unsigned char* ptr = buffer_.data();          // Current position in buffer
+        unsigned char* end = ptr + bytes_read;        // End of valid data
+
         while (ptr < end) {
+            // Cast to BPF header (interprets raw bytes as struct)
             struct bpf_hdr* bh = reinterpret_cast<struct bpf_hdr*>(ptr);
-            
+
+            // BOUNDS CHECK 1: Is there a complete header?
             if (ptr + bh->bh_hdrlen > end) {
+                // Partial header at end of buffer; discard and exit
                 break;
             }
-            
+
+            // Calculate packet start: just after the BPF header
             unsigned char* packet = ptr + bh->bh_hdrlen;
+
+            // BOUNDS CHECK 2: Is the complete packet in buffer?
             if (packet + bh->bh_caplen > end) {
+                // Partial packet at end of buffer; discard and exit
                 break;
             }
-            
+
+            // ZERO-COPY PACKET ACCESS
+            // =======================
+            // Notice: we're NOT copying the packet data
+            // We pass a pointer directly into the kernel buffer
+            // This is extremely efficient: zero allocation, zero memcpy
+            //
+            // The packet pointer remains valid ONLY until the next read()
+            // call, after which the buffer will be overwritten
+            // PacketParser must not cache these pointers across loop iterations
+
             struct timeval tv;
             tv.tv_sec = bh->bh_tstamp.tv_sec;
             tv.tv_usec = bh->bh_tstamp.tv_usec;
 
+            // Process this packet (parse and either send to server or print)
             if (server_fd_ != -1) {
                 PacketParser::parseToJSON(packet, bh->bh_caplen, tv, nullptr);
             } else {
                 PacketParser::parseAndPrint(packet, bh->bh_caplen, tv);
             }
+
+            // STEP 3: Move pointer to next packet
+            // ====================================
+            // BPF_WORDALIGN: Round up to machine word boundary (typically 4 bytes)
+            //
+            // Why alignment?
+            // - BPF records must start on word boundaries
+            // - Unaligned memory access is slow (or illegal on some architectures)
+            // - Example: record is 25 bytes -> rounds to 28 bytes (next multiple of 4)
+            //
+            // Memory layout:
+            // Offset 0:   [bpf_hdr: 18 bytes][packet: 7 bytes][padding: 3 bytes]
+            // Offset 28:  [next bpf_hdr: 18 bytes]...
+            //             ^-- Aligned to 4-byte boundary
+            //
+            // Formula: BPF_WORDALIGN(x) = (((x) + 3) & ~3)
+            //          Rounds up to nearest multiple of 4
+            //
+            // Common mistake: forgetting alignment
+            // - Would read into middle of next bpf_hdr
+            // - Would parse garbage data
+            // - Could cause infinite loops or crashes
 
             ptr += BPF_WORDALIGN(bh->bh_hdrlen + bh->bh_caplen);
         }
@@ -173,7 +304,7 @@ void Sniffer::sendClientHello() {
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
     hello["hostname"] = hostname;
-    hello["interface"] = iface_;
+    hello["interface"] = iFface_;
 
     if (!sendFrame(Protocol::CLIENT_HELLO, hello.dump())) {
         throw std::runtime_error("Failed to send CLIENT_HELLO");
@@ -215,13 +346,70 @@ bool Sniffer::sendFrame(uint8_t type, const std::string& payload) {
 }
 
 bool Sniffer::readExact(int fd, void* buf, size_t len) {
+    // TCP SHORT READ HANDLING
+    // =================================================================
+    // This function solves a fundamental TCP/IP problem:
+    // read() may return FEWER bytes than requested, even if more are available
+    //
+    // Problem Scenario:
+    // ==================
+    // You want to read 100 bytes.
+    // read(fd, buf, 100) returns 45.
+    // You must call read() again to get the remaining 55 bytes.
+    // But naively, you'd process only 45 bytes, losing the rest!
+    //
+    // Why does TCP do this?
+    // TCP is a byte stream protocol. The kernel fills read() from:
+    // 1. Data already arrived from network
+    // 2. Data waiting in socket buffer
+    // 3. Available kernel buffer space
+    // The kernel may have received packet 1 (45 bytes) but not packet 2 yet.
+    // It returns what's available rather than blocking forever.
+    //
+    // Real example from networking:
+    // - You ask for 1024 bytes (a frame: header + payload)
+    // - Network delivers first 64 bytes
+    // - read() returns 64, not 1024
+    // - Your frame parser would fail: "incomplete frame!"
+    // - Without readExact(), frame parsing is broken
+    //
+    // Solution: readExact() loop
+    // ==========================
+    // Keep reading until we have exactly len bytes OR an error occurs
+    //
+    // Details:
+    // - total: bytes accumulated so far
+    // - buf + total: offset into buffer where to place next read
+    // - len - total: how many more bytes we still need
+    // - Loop while total < len (haven't reached goal)
+    // - If read() returns 0 or -1: error/EOF, return false
+    // - Otherwise: accumulate in total, continue loop
+    //
+    // Example execution:
+    // Want to read: 100 bytes
+    // Iteration 1: read() returns 45  -> total=45, continue
+    // Iteration 2: read() returns 30  -> total=75, continue
+    // Iteration 3: read() returns 25  -> total=100, exit loop
+    // return true (success)
+    //
+    // This pattern is ESSENTIAL for:
+    // - Binary protocol parsing (our case)
+    // - HTTP parsing (wait for exact headers)
+    // - SSL/TLS handshakes
+    // - Any fixed-size-header protocol
+    //
+    // Alternative approaches NOT used:
+    // - MSG_WAITALL flag: not portable (Unix-specific)
+    // - Socket timeout: adds complexity
+    // - Non-blocking I/O with select/epoll: much more complex
+
     size_t total = 0;
     while (total < len) {
         ssize_t n = read(fd, (char*)buf + total, len - total);
-        if (n <= 0) return false;
+        if (n <= 0) return false;  // Error or EOF
         total += n;
     }
-    return true;
+    return true;  // Got exactly len bytes
 }
 
 bool Sniffer::readFrame(int fd, uint8_t& type, std::string& payload) {

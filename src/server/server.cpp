@@ -76,10 +76,10 @@ using json = nlohmann::json;
  * @brief Represents a connected client (sniffer or GUI)
  */
 struct Client {
-    int fd;                    ///< File descriptor for socket connection
-    std::string remote_ip;     ///< Client IP address
-    uint32_t ssid;             ///< Unique Session ID assigned by server
-    bool is_sniffer;           ///< True if sniffer, false if GUI client
+    int fd; ///< File descriptor for socket connection
+    std::string remote_ip; ///< Client IP address
+    uint32_t ssid; ///< Unique Session ID assigned by server
+    bool is_sniffer; ///< True if sniffer, false if GUI client
 };
 
 /**
@@ -87,28 +87,28 @@ struct Client {
  * @brief Metadata about a sniffer instance
  */
 struct SnifferRecord {
-    int sniffer_index;         ///< Sequential index of this sniffer
-    std::string ip;            ///< IP address of the sniffer
+    int sniffer_index; ///< Sequential index of this sniffer
+    std::string ip; ///< IP address of the sniffer
 };
 
 // ============================================================================
 // GLOBAL STATE (Protected by clients_mutex)
 // ============================================================================
 
-std::vector<Client> clients;                           ///< All connected clients
-std::mutex clients_mutex;                              ///< Protects clients list access
-std::map<std::string, SnifferRecord> ip_to_sniffer;    ///< Maps IP to sniffer metadata
-std::map<int, uint32_t> fd_to_ssid;                    ///< Maps file descriptor to SSID
-uint32_t next_ssid = 1;                                ///< Counter for assigning SSIDs
-int next_sniffer_index = 1;                            ///< Counter for sniffer indices
+std::vector<Client> clients; ///< All connected clients
+std::mutex clients_mutex; ///< Protects clients list access
+std::map<std::string, SnifferRecord> ip_to_sniffer; ///< Maps IP to sniffer metadata
+std::map<int, uint32_t> fd_to_ssid; ///< Maps file descriptor to SSID
+uint32_t next_ssid = 1; ///< Counter for assigning SSIDs
+int next_sniffer_index = 1; ///< Counter for sniffer indices
 
 /**
  * @struct Frame
  * @brief Parsed binary frame received from socket
  */
 struct Frame {
-    uint8_t type;           ///< Message type (CLIENT_HELLO, TRAFFIC_LOG, etc.)
-    std::string payload;    ///< JSON payload (varies by message type)
+    uint8_t type; ///< Message type (CLIENT_HELLO, TRAFFIC_LOG, etc.)
+    std::string payload; ///< JSON payload (varies by message type)
 };
 
 // ============================================================================
@@ -128,10 +128,10 @@ struct Frame {
  *
  * @note This is a blocking call that will wait for data
  */
-bool readExact(int fd, void* buf, size_t len) {
+bool readExact(int fd, void *buf, size_t len) {
     size_t total = 0;
     while (total < len) {
-        ssize_t n = read(fd, (char*)buf + total, len - total);
+        ssize_t n = read(fd, (char *) buf + total, len - total);
         if (n <= 0) return false;
         total += n;
     }
@@ -154,7 +154,7 @@ bool readExact(int fd, void* buf, size_t len) {
  *
  * @note Sets frame.type and frame.payload on success
  */
-bool readFrame(int fd, Frame& frame) {
+bool readFrame(int fd, Frame &frame) {
     std::cout << "[DEBUG] readFrame: trying to read 4-byte header" << std::endl;
     uint8_t header[4];
     if (!readExact(fd, header, 4)) {
@@ -162,18 +162,19 @@ bool readFrame(int fd, Frame& frame) {
         return false;
     }
 
-    std::cout << "[DEBUG] Header bytes: " << (int)header[0] << " " << (int)header[1] << " " << (int)header[2] << " " << (int)header[3] << std::endl;
+    std::cout << "[DEBUG] Header bytes: " << (int) header[0] << " " << (int) header[1] << " " << (int) header[2] << " "
+            << (int) header[3] << std::endl;
 
     uint8_t version = header[0];
     if (version != Protocol::VERSION) {
-        std::cerr << "Invalid protocol version: " << (int)version << std::endl;
+        std::cerr << "Invalid protocol version: " << (int) version << std::endl;
         return false;
     }
 
     frame.type = header[1];
     uint16_t length = (header[2] << 8) | header[3];
 
-    std::cout << "[DEBUG] Frame type: " << (int)frame.type << ", payload length: " << length << std::endl;
+    std::cout << "[DEBUG] Frame type: " << (int) frame.type << ", payload length: " << length << std::endl;
 
     if (length > 1024) {
         std::cerr << "Payload too large: " << length << std::endl;
@@ -194,7 +195,7 @@ bool readFrame(int fd, Frame& frame) {
     }
 
     if (term != Protocol::TERM_BYTE) {
-        std::cerr << "Invalid terminator byte: " << (int)term << std::endl;
+        std::cerr << "Invalid terminator byte: " << (int) term << std::endl;
         return false;
     }
 
@@ -215,7 +216,7 @@ bool readFrame(int fd, Frame& frame) {
  *
  * @note Does NOT handle partial writes - fails if full frame not sent atomically
  */
-bool sendFrame(int fd, uint8_t type, const std::string& payload) {
+bool sendFrame(int fd, uint8_t type, const std::string &payload) {
     if (payload.length() > 1024) return false;
 
     uint8_t header[4];
@@ -225,7 +226,7 @@ bool sendFrame(int fd, uint8_t type, const std::string& payload) {
     header[3] = payload.length() & 0xFF;
 
     if (write(fd, header, 4) != 4) return false;
-    if (write(fd, payload.data(), payload.length()) != (ssize_t)payload.length()) return false;
+    if (write(fd, payload.data(), payload.length()) != (ssize_t) payload.length()) return false;
     if (write(fd, &Protocol::TERM_BYTE, 1) != 1) return false;
 
     return true;
@@ -240,7 +241,7 @@ bool sendFrame(int fd, uint8_t type, const std::string& payload) {
 std::string getClientIP(int fd) {
     struct sockaddr_in addr;
     socklen_t len = sizeof(addr);
-    if (getpeername(fd, (struct sockaddr*)&addr, &len) == -1) {
+    if (getpeername(fd, (struct sockaddr *) &addr, &len) == -1) {
         return "";
     }
     return std::string(inet_ntoa(addr.sin_addr));
@@ -310,7 +311,7 @@ std::string getClientIP(int fd) {
  * {"ssid":1,"log":{"timestamp":"2025-12-16 21:15:30.123","src":"192.168.1.100","dst":"142.251.41.14","protocol":"TCP",...}}
  * ```
  */
-void handleClient(int client_fd, const std::string& client_ip) {
+void handleClient(int client_fd, const std::string &client_ip) {
     std::cout << "[SERVER] handleClient: trying to read first frame" << std::endl;
     Frame frame;
     if (!readFrame(client_fd, frame)) {
@@ -319,7 +320,8 @@ void handleClient(int client_fd, const std::string& client_ip) {
         return;
     }
 
-    std::cout << "[SERVER] Received frame type: " << (int)frame.type << ", payload size: " << frame.payload.size() << std::endl;
+    std::cout << "[SERVER] Received frame type: " << (int) frame.type << ", payload size: " << frame.payload.size() <<
+            std::endl;
 
     if (frame.type == Protocol::CLIENT_HELLO) {
         try {
@@ -335,8 +337,7 @@ void handleClient(int client_fd, const std::string& client_ip) {
             // Sniffers send "interface" field, GUI clients send "type":"gui"
             bool is_sniffer = payload.contains("interface");
 
-            uint32_t ssid;
-            {
+            uint32_t ssid; {
                 // Critical section: protect clients list and SSID assignment
                 std::lock_guard<std::mutex> lock(clients_mutex);
 
@@ -393,8 +394,33 @@ void handleClient(int client_fd, const std::string& client_ip) {
 
                         // Broadcast to all connected GUI clients
                         {
+                            // LOCK GRANULARITY: Narrow Critical Section
+                            // ===============================================
+                            // Lock scope: Only protect the clients list iteration
+                            // Unlock scope: BEFORE actual sendFrame() socket writes
+                            //
+                            // Why use narrow locks?
+                            // - Reduces lock contention: other threads waiting for access
+                            // - sendFrame() can block on socket writes (slow I/O)
+                            // - If locked during sendFrame(), all other threads blocked
+                            // - Narrow locks: maximum concurrency
+                            //
+                            // Race condition trade-off:
+                            // - RISK: clients list could change during iteration
+                            //   (new GUI connects, another GUI disconnects)
+                            // - REAL IMPACT: low for this design
+                            //   * New GUIs: won't receive this frame (next frame OK)
+                            //   * Disconnected GUI: sendFrame() error handled gracefully
+                            // - ACCEPTABLE: This is a teaching project
+                            //
+                            // Production Improvement:
+                            // - Snapshot the client list while locked
+                            // - Release lock
+                            // - Send to snapshots
+                            // - Eliminates race condition entirely
+                            //
                             std::lock_guard<std::mutex> lock(clients_mutex);
-                            for (const auto& c : clients) {
+                            for (const auto &c: clients) {
                                 if (!c.is_sniffer) {
                                     // Send FORWARD_LOG frame to GUI client
                                     sendFrame(c.fd, Protocol::FORWARD_LOG, forward_str);
@@ -410,8 +436,7 @@ void handleClient(int client_fd, const std::string& client_ip) {
                     sleep(1);
                 }
             }
-
-        } catch (const std::exception& e) {
+        } catch (const std::exception &e) {
             std::cerr << "Error handling client: " << e.what() << std::endl;
             std::cerr << "[SERVER] Exception details: " << typeid(e).name() << std::endl;
         }
@@ -419,7 +444,7 @@ void handleClient(int client_fd, const std::string& client_ip) {
 
     std::lock_guard<std::mutex> lock(clients_mutex);
     clients.erase(std::remove_if(clients.begin(), clients.end(),
-        [client_fd](const Client& c) { return c.fd == client_fd; }), clients.end());
+                                 [client_fd](const Client &c) { return c.fd == client_fd; }), clients.end());
     fd_to_ssid.erase(client_fd);
     close(client_fd);
 }
@@ -453,7 +478,7 @@ void acceptLoop(int server_fd) {
     while (true) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
-        int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
+        int client_fd = accept(server_fd, (struct sockaddr *) &client_addr, &client_len);
 
         if (client_fd < 0) {
             std::cerr << "Accept failed" << std::endl;
@@ -464,6 +489,30 @@ void acceptLoop(int server_fd) {
         std::cout << "New connection from " << client_ip << std::endl;
 
         // Spawn a new thread for this client (detached so we don't track it)
+        //
+        // THREADING MODEL: Thread-per-connection
+        // ============================================
+        // Current design spawns ONE NEW THREAD per client connection.
+        //
+        // Advantages:
+        // - Simple implementation: each thread blocks on readFrame() independently
+        // - Automatic concurrency: no need for event loops or async I/O
+        // - Each thread has its own stack and context
+        //
+        // Scalability Limitations:
+        // - Each thread consumes ~8MB of stack memory
+        // - OS kernel has thread limits (typically 4K-100K threads)
+        // - Context switching overhead increases with many threads
+        // - Max realistic connections: ~1000-5000 with this model
+        //
+        // Production Alternative: Thread Pool + Work Queue
+        // - Pool of N worker threads (e.g., 32 threads)
+        // - Each new connection queued
+        // - Workers process from queue
+        // - Scalable to 100K+ connections
+        // - Trade-off: more complex code, event-based design (epoll/kqueue)
+        //
+        // For a teaching project handling <100 sniffers: this simple model is fine.
         std::thread(handleClient, client_fd, client_ip).detach();
     }
 }
@@ -505,7 +554,7 @@ void acceptLoop(int server_fd) {
  * Sniffer registered: IP=192.168.1.100 SSID=1
  * ```
  */
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     if (argc != 2) {
         std::cerr << "Usage: " << argv[0] << " <port>" << std::endl;
         return 1;
@@ -516,6 +565,25 @@ int main(int argc, char* argv[]) {
     // ====================================================================
     // STEP 1: Create socket
     // ====================================================================
+    // socket(AF_INET, SOCK_STREAM, 0) creates a TCP socket for network communication
+    //
+    // Parameter breakdown:
+    // - AF_INET: Address Family - IPv4 (network communication)
+    //   * Alternative: AF_INET6 for IPv6, AF_UNIX for local IPC
+    //
+    // - SOCK_STREAM: Socket type - TCP (reliable, ordered, connection-based)
+    //   * Alternative: SOCK_DGRAM for UDP (unreliable, connectionless)
+    //
+    // - 0: Protocol - Auto-select based on address family + socket type
+    //   * Kernel chooses IPPROTO_TCP (protocol 6) automatically
+    //   * Why 0 instead of IPPROTO_TCP? The combination AF_INET+SOCK_STREAM is
+    //     unambiguous, so 0 is both clearer and safer than hardcoding 6
+    //   * This is idiomatic C socket API design
+    //
+    // Why TCP over UDP?
+    // - We need guaranteed delivery (captured packets must arrive intact)
+    // - We need ordering (packets must arrive in sequence)
+    // - We need connection management (CLIENT_HELLO handshake protocol)
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
         std::cerr << "Failed to create socket" << std::endl;
@@ -538,7 +606,7 @@ int main(int argc, char* argv[]) {
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(port);
 
-    if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if (bind(server_fd, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
         std::cerr << "Failed to bind" << std::endl;
         return 1;
     }
